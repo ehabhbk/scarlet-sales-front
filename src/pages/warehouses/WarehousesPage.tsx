@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { formatNumber } from '../../utils/format'
 import {
   AlertTriangle,
   ArrowLeftRight,
@@ -13,12 +14,14 @@ import {
   Plus,
   RefreshCw,
   Search,
+  ShoppingCart,
   Trash2,
   Warehouse as WarehouseIcon,
 } from 'lucide-react'
 import { api } from '../../services/api'
 import Button from '../../components/common/buttons/Button'
 import Input from '../../components/common/inputs/Input'
+import Badge from '../../components/common/data-display/Badge'
 import Card from '../../components/common/cards/Card'
 import Modal from '../../components/common/modals/Modal'
 import { useSettingsStore, formatMoney, mediaUrl } from '../../store/settingsStore'
@@ -139,6 +142,37 @@ const EMPTY_WAREHOUSE = {
 
 type WarehouseForm = typeof EMPTY_WAREHOUSE
 
+interface WarehouseProduct {
+  id: number
+  name: string
+  sku?: string | null
+  barcode?: string | null
+  category?: { name: string } | string
+  sale_price: number
+  cost_price: number
+  current_stock: number
+  min_stock?: number
+  sale_unit?: string | null
+  purchase_unit?: string | null
+  total_stock?: number
+  is_available: boolean
+  image?: string | null
+}
+
+const EMPTY_PRODUCT_FORM = {
+  name: '',
+  sku: '',
+  barcode: '',
+  sale_price: '',
+  cost_price: '',
+  min_stock: '',
+  sale_unit: '',
+  purchase_unit: '',
+  is_available: true,
+}
+
+type ProductForm = typeof EMPTY_PRODUCT_FORM
+
 const EMPTY_STOCK_IN = {
   warehouse_id: '',
   product_id: '',
@@ -152,7 +186,7 @@ const EMPTY_STOCK_IN = {
 export default function WarehousesPage() {
   const { symbol } = useSettingsStore()
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState<'warehouses' | 'stock' | 'requests'>('warehouses')
+  const [tab, setTab] = useState<'warehouses' | 'stock' | 'products' | 'requests'>('warehouses')
   const [manualWarehouseId, setManualWarehouseId] = useState<number | null>(null)
   const [search, setSearch] = useState('')
   const [lowStockOnly, setLowStockOnly] = useState(false)
@@ -175,6 +209,9 @@ export default function WarehousesPage() {
     quantity: '',
     notes: '',
   })
+  const [productModalOpen, setProductModalOpen] = useState(false)
+  const [editingProduct, setEditingProduct] = useState<WarehouseProduct | null>(null)
+  const [productForm, setProductForm] = useState<ProductForm>(EMPTY_PRODUCT_FORM)
 
   const { data: warehouses, isLoading: warehousesLoading } = useQuery({
     queryKey: ['warehouses'],
@@ -186,6 +223,15 @@ export default function WarehousesPage() {
 
   const selectedWarehouseId =
     manualWarehouseId ?? (warehouses?.find((warehouse) => warehouse.is_default)?.id ?? warehouses?.[0]?.id ?? null)
+
+  const { data: warehouseProducts, isLoading: warehouseProductsLoading } = useQuery({
+    queryKey: ['warehouse-products'],
+    queryFn: async () => {
+      const res = await api.get('/products?per_page=200')
+      return (res.data.data || []) as WarehouseProduct[]
+    },
+    enabled: tab === 'products',
+  })
 
   const { data: stockRequests, refetch: refetchStockRequests } = useQuery({
     queryKey: ['stock-requests'],
@@ -379,6 +425,34 @@ export default function WarehousesPage() {
     onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تعديل الكمية')),
   })
 
+  const saveProductMutation = useMutation({
+    mutationFn: async () => {
+      if (editingProduct) {
+        await api.put(`/products/${editingProduct.id}`, productForm)
+      } else {
+        await api.post('/products', productForm)
+      }
+    },
+    onSuccess: () => {
+      toast.success('تم حفظ المنتج')
+      setProductModalOpen(false)
+      void queryClient.invalidateQueries({ queryKey: ['warehouse-products'] })
+      void queryClient.invalidateQueries({ queryKey: ['products'] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر حفظ المنتج')),
+  })
+
+  const deleteProductMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/products/${id}`)
+    },
+    onSuccess: () => {
+      toast.success('تم حذف المنتج')
+      void queryClient.invalidateQueries({ queryKey: ['warehouse-products'] })
+      void queryClient.invalidateQueries({ queryKey: ['products'] })
+    },
+  })
+
   const openCreateWarehouse = () => {
     setEditingWarehouse(null)
     setWarehouseForm(EMPTY_WAREHOUSE)
@@ -486,6 +560,10 @@ export default function WarehousesPage() {
         <TabButton active={tab === 'stock'} onClick={() => setTab('stock')}>
           <Package className="h-4 w-4" />
           الأرصدة والدفعات
+        </TabButton>
+        <TabButton active={tab === 'products'} onClick={() => setTab('products')}>
+          <ShoppingCart className="h-4 w-4" />
+          المنتجات
         </TabButton>
       </div>
 
@@ -703,6 +781,90 @@ export default function WarehousesPage() {
               </tbody>
             </table>
           </div>
+        </Card>
+      )}
+
+      {tab === 'products' && (
+        <Card className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">إدارة المنتجات</h2>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                إضافة وتعديل وحذف المنتجات، وتحديد المخزن الافتراضي للتخزين.
+              </p>
+            </div>
+            <Button onClick={() => { setEditingProduct(null); setProductForm(EMPTY_PRODUCT_FORM); setProductModalOpen(true) }}>
+              <Plus className="w-4 h-4" /> إضافة منتج
+            </Button>
+          </div>
+          {warehouseProductsLoading ? (
+            <p className="py-8 text-center text-sm text-gray-500">جارٍ تحميل المنتجات...</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-800">
+                  <tr>
+                    <th className="px-3 py-2 text-start">المنتج</th>
+                    <th className="px-3 py-2 text-start">الباركود / SKU</th>
+                    <th className="px-3 py-2 text-start">المخزون</th>
+                    <th className="px-3 py-2 text-start">الحد الأدنى</th>
+                    <th className="px-3 py-2 text-start">سعر البيع</th>
+                    <th className="px-3 py-2 text-start">الحالة</th>
+                    <th className="px-3 py-2 text-start">إجراءات</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(warehouseProducts || []).map((product) => (
+                    <tr key={product.id} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="px-3 py-2 font-medium">{product.name}</td>
+                      <td className="px-3 py-2 text-gray-600 dark:text-gray-300">{product.barcode || product.sku || '-'}</td>
+                      <td className="px-3 py-2">
+                        <span className={`px-2 py-0.5 rounded text-xs ${Number(product.total_stock ?? 0) <= Number(product.min_stock ?? 0) && Number(product.min_stock ?? 0) > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {formatNumber(Number(product.total_stock ?? 0))}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{formatNumber(Number(product.min_stock ?? 0))}</td>
+                      <td className="px-3 py-2">{formatMoney(product.sale_price, symbol)}</td>
+                      <td className="px-3 py-2">{product.is_available ? <Badge variant="success">متوفر</Badge> : <Badge variant="default">غير متاح</Badge>}</td>
+                      <td className="px-3 py-2 flex gap-2">
+                        <button
+                          onClick={() => {
+                            setEditingProduct(product)
+                            setProductForm({
+                              name: product.name,
+                              sku: product.sku || '',
+                              barcode: product.barcode || '',
+                              sale_price: String(product.sale_price),
+                              cost_price: String(product.cost_price),
+                              min_stock: String(product.min_stock ?? 0),
+                              sale_unit: product.sale_unit || '',
+                              purchase_unit: product.purchase_unit || '',
+                              is_available: product.is_available,
+                            })
+                            setProductModalOpen(true)
+                          }}
+                          className="p-1 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded"
+                          title="تعديل"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => deleteProductMutation.mutate(product.id)}
+                          className="p-1 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded"
+                          title="حذف"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!warehouseProducts?.length && (
+                    <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-500">لا توجد منتجات</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
 
@@ -1107,6 +1269,97 @@ export default function WarehousesPage() {
           )}
         </div>
       </Modal>
+
+      <Modal
+        isOpen={productModalOpen}
+        onClose={() => setProductModalOpen(false)}
+        title={editingProduct ? 'تعديل منتج' : 'إضافة منتج'}
+        size="lg"
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            saveProductMutation.mutate()
+          }}
+        >
+          <Input
+            label="اسم المنتج"
+            value={productForm.name}
+            onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+            required
+          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input
+              label="SKU"
+              value={productForm.sku}
+              onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })}
+            />
+            <Input
+              label="الباركود"
+              value={productForm.barcode}
+              onChange={(e) => setProductForm({ ...productForm, barcode: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input
+              label="سعر البيع"
+              type="number"
+              min={0}
+              step="0.01"
+              value={productForm.sale_price}
+              onChange={(e) => setProductForm({ ...productForm, sale_price: e.target.value })}
+              required
+            />
+            <Input
+              label="تكلفة الوحدة"
+              type="number"
+              min={0}
+              step="0.01"
+              value={productForm.cost_price}
+              onChange={(e) => setProductForm({ ...productForm, cost_price: e.target.value })}
+              required
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input
+              label="وحدة البيع"
+              value={productForm.sale_unit}
+              placeholder="مثال: قطعة، كرتون"
+              onChange={(e) => setProductForm({ ...productForm, sale_unit: e.target.value })}
+            />
+            <Input
+              label="وحدة الشراء"
+              value={productForm.purchase_unit}
+              placeholder="مثال: صندوق، كيس"
+              onChange={(e) => setProductForm({ ...productForm, purchase_unit: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input
+              label="الحد الأدنى للمخزون"
+              type="number"
+              min={0}
+              value={productForm.min_stock}
+              onChange={(e) => setProductForm({ ...productForm, min_stock: e.target.value })}
+            />
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={productForm.is_available}
+                onChange={(e) => setProductForm({ ...productForm, is_available: e.target.checked })}
+                className="w-4 h-4"
+              />
+              متاح للبيع
+            </label>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setProductModalOpen(false)}>إلغاء</Button>
+            <Button type="submit" loading={saveProductMutation.isPending}>حفظ</Button>
+          </div>
+        </form>
+      </Modal>
+
     </div>
   )
 }

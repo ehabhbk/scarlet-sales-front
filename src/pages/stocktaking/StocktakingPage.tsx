@@ -12,10 +12,12 @@ import { mediaUrl } from '../../store/settingsStore'
 interface Item {
   id: number
   name: string
-  sku?: string
+  sku?: string | null
+  barcode?: string | null
   current_stock: number
-  min_stock: number
-  unit?: { abbreviation?: string }
+  total_stock?: number
+  min_stock?: number
+  category?: { name: string } | string
 }
 
 export default function StocktakingPage() {
@@ -23,19 +25,20 @@ export default function StocktakingPage() {
   const [started, setStarted] = useState(false)
   const [counts, setCounts] = useState<Record<number, string>>({})
   const { data, isLoading } = useQuery({
-    queryKey: ['inventory-items-all'],
+    queryKey: ['stocktake-products-all'],
     queryFn: async () => {
-      const res = await api.get('/inventory-items?per_page=1000')
+      const res = await api.get('/products?per_page=1000')
       return res.data
     },
   })
-  const items: Item[] = data?.data || []
+  const items: Item[] = (data?.data || [])
+  const stockFor = (it: Item) => Number(it.total_stock ?? it.current_stock) || 0
 
   const handlePrint = () => {
     const rows = items.map((it) => {
-      const counted = counts[it.id] !== undefined && counts[it.id] !== '' ? Number(counts[it.id]) : it.current_stock
-      const diff = counted - (Number(it.current_stock) || 0)
-      return [it.name, it.sku || '-', String(it.current_stock), String(counted), String(diff)]
+      const counted = counts[it.id] !== undefined && counts[it.id] !== '' ? Number(counts[it.id]) : stockFor(it)
+      const diff = counted - stockFor(it)
+      return [it.name, it.sku || '-', String(stockFor(it)), String(counted), String(diff)]
     })
     printReport({
       title: 'جرد المخزون',
@@ -43,7 +46,7 @@ export default function StocktakingPage() {
       logo: mediaUrl(restaurant?.logo),
       meta: [{ label: 'الحالة', value: started ? 'جارٍ الجرد' : 'لم يبدأ' }],
       sections: [{
-        title: 'أصناف المخزون',
+        title: 'منتجات المخزون',
         columns: [{ label: 'الصنف' }, { label: 'SKU' }, { label: 'الكمية (نظام)' }, { label: 'الكمية (فعلي)' }, { label: 'الفرق' }],
         rows,
       }],
@@ -52,8 +55,8 @@ export default function StocktakingPage() {
   }
 
   const totalDiff = useMemo(() => items.reduce((s, it) => {
-    const counted = counts[it.id] !== undefined && counts[it.id] !== '' ? Number(counts[it.id]) : Number(it.current_stock) || 0
-    return s + (counted - (Number(it.current_stock) || 0))
+    const counted = counts[it.id] !== undefined && counts[it.id] !== '' ? Number(counts[it.id]) : stockFor(it)
+    return s + (counted - stockFor(it))
   }, 0), [items, counts])
 
   return (
@@ -86,20 +89,20 @@ export default function StocktakingPage() {
               </thead>
               <tbody>
                 {items.map((it) => {
-                  const counted = counts[it.id] !== undefined && counts[it.id] !== '' ? Number(counts[it.id]) : (Number(it.current_stock) || 0)
-                  const diff = counted - (Number(it.current_stock) || 0)
+                  const counted = counts[it.id] !== undefined && counts[it.id] !== '' ? Number(counts[it.id]) : stockFor(it)
+                  const diff = counted - stockFor(it)
                   return (
                     <tr key={it.id} className="border-b border-gray-100 dark:border-gray-800">
                       <td className="px-3 py-2">{it.name}</td>
                       <td className="px-3 py-2">{it.sku || '-'}</td>
-                      <td className="px-3 py-2">{it.current_stock}</td>
+                      <td className="px-3 py-2">{stockFor(it)}</td>
                       <td className="px-3 py-2">
                         {started ? (
                           <Input
                             type="number"
                             value={counts[it.id] ?? ''}
                             onChange={(e) => setCounts((c) => ({ ...c, [it.id]: e.target.value }))}
-                            placeholder={String(it.current_stock)}
+                            placeholder={String(stockFor(it))}
                           />
                         ) : (
                           <span className="text-gray-400">—</span>

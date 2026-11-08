@@ -10,7 +10,6 @@ import MainLayout from './layouts/MainLayout'
 import LoginPage from './pages/auth/LoginPage'
 import DashboardPage from './pages/dashboard/DashboardPage'
 import POSPage from './pages/pos/POSPage'
-import ProductsPage from './pages/products/ProductsPage'
 import OrdersPage from './pages/orders/OrdersPage'
 import WarehousesPage from './pages/warehouses/WarehousesPage'
 import InventoryPage from './pages/inventory/InventoryPage'
@@ -105,15 +104,7 @@ function App() {
               <Navigate to="/login" />
             )
           } />
-          <Route path="/products" element={
-            isAuthenticated ? (
-              <MainLayout>
-                <ProductsPage />
-              </MainLayout>
-            ) : (
-              <Navigate to="/login" />
-            )
-          } />
+          <Route path="/products" element={<Navigate to="/warehouses" replace />} />
           <Route path="/orders" element={
             isAuthenticated ? (
               <MainLayout>

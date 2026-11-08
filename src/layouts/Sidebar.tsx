@@ -2,7 +2,6 @@ import { Link, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import {
   LayoutDashboard,
-  ShoppingBag,
   ShoppingCart,
   Warehouse,
   Package,
@@ -10,7 +9,6 @@ import {
   Activity,
   Bell,
   Users,
-  Tag,
   DollarSign,
   Receipt,
   Landmark,
@@ -80,22 +78,13 @@ export default function Sidebar({ open, mobileOpen, onClose }: SidebarProps) {
     },
     { icon: ShoppingCart, label: t('pos', lang), path: '/pos', anyPermissions: ['create_orders', 'view_pos'] },
     {
-      icon: ShoppingBag,
-      label: t('products', lang),
-      path: '/products',
-      permissions: ['view_products'],
-      children: [
-        { label: 'التصنيفات', path: '/categories', icon: Tag, permissions: ['view_categories'] },
-      ],
-    },
-    {
       icon: Warehouse,
       label: 'المخزون',
       path: '/warehouses',
       anyPermissions: ['view_warehouses', 'view_inventory', 'view_products', 'manage_stock'],
       children: [
         { label: 'المخازن والمنتجات', path: '/warehouses', icon: Warehouse, permissions: ['view_warehouses'] },
-        { label: 'المواد الخام', path: '/inventory', icon: Package, permissions: ['view_inventory'] },
+        { label: 'المنتجات', path: '/inventory', icon: Package, permissions: ['view_inventory'] },
         { label: 'حركات المخزون', path: '/stock-movements', icon: Activity, permissions: ['view_inventory'] },
         { label: 'المشتريات', path: '/purchases', icon: Truck, permissions: ['view_purchases'] },
         { label: 'الموردون', path: '/suppliers', icon: Truck, permissions: ['view_suppliers'] },
