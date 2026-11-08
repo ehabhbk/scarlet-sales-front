@@ -117,6 +117,7 @@ interface SettingsState {
   customCurrencies: CurrencyOption[]
   paymentMethods: PaymentMethod[]
   reportSettings: Record<string, string>
+  posSaleSource: string
   settingsError: string | null
   loaded: boolean
   loading: boolean
@@ -137,6 +138,7 @@ export const useSettingsStore = create<SettingsState>()(
       customCurrencies: [],
       paymentMethods: [],
       reportSettings: {},
+      posSaleSource: 'both',
       settingsError: null,
       loaded: false,
       loading: false,
@@ -186,6 +188,12 @@ export const useSettingsStore = create<SettingsState>()(
           reportSettings[row.key] = String(row.value ?? '')
         }
         set({ reportSettings })
+
+        const posRows = settingsResult.status === 'fulfilled'
+          ? ((settingsResult.value.data?.settings || []) as SettingRow[]).filter((r) => r.group === 'pos')
+          : []
+        const posSaleSourceRow = posRows.find((r) => r.key === 'pos_sale_source')
+        set({ posSaleSource: String(posSaleSourceRow?.value ?? 'both') })
 
         const errors = [restaurantResult, settingsResult]
           .filter((result) => result.status === 'rejected')

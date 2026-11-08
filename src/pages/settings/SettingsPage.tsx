@@ -121,6 +121,11 @@ const GROUPS: Record<string, SettingField[]> = {
     { key: 'enable_customer_name', label: 'السماح بإدخال اسم العميل', type: 'boolean', defaultValue: 'true' },
     { key: 'allow_discount', label: 'السماح بالخصم', type: 'boolean', defaultValue: 'true' },
     { key: 'max_discount_percent', label: 'أقصى نسبة خصم %', type: 'number', defaultValue: '20' },
+    { key: 'pos_sale_source', label: 'مصدر البيع (نقطة البيع)', type: 'select', defaultValue: 'both', options: [
+      { value: 'store', label: 'المتجر فقط (نقاط البيع)' },
+      { value: 'pos', label: 'المخزن فقط' },
+      { value: 'both', label: 'كلاهما' },
+    ] },
     {
       key: 'close_shift_anyone',
       label: 'السماح لأي مستخدم لديه صلاحية إغلاق الوردية بإغلاق وردية فتحها غيره',
@@ -1051,6 +1056,10 @@ const PERMISSION_LABELS: Record<string, string> = {
   delete_inventory: 'حذف صنف مخزون',
   // المخازن
   view_warehouses: 'عرض المخازن',
+  view_stock_requests: 'عرض طلبات المخزون',
+  create_stock_requests: 'إنشاء طلب مخزون',
+  approve_stock_requests: 'الموافقة على طلب مخزون',
+  reject_stock_requests: 'رفض طلب مخزون',
   create_warehouses: 'إضافة مخزن',
   edit_warehouses: 'تعديل مخزن',
   delete_warehouses: 'حذف مخزن',

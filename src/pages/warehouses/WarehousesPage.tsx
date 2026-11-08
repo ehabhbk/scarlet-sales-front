@@ -30,6 +30,8 @@ interface WarehouseRecord {
   name: string
   code?: string | null
   type?: string | null
+  allow_sales?: boolean
+  pos_sale_source?: string | null
   address?: string | null
   phone?: string | null
   is_default: boolean
@@ -126,6 +128,8 @@ const EMPTY_WAREHOUSE = {
   name: '',
   code: '',
   type: 'store',
+  allow_sales: true,
+  pos_sale_source: '',
   address: '',
   phone: '',
   is_default: false,
@@ -148,7 +152,7 @@ const EMPTY_STOCK_IN = {
 export default function WarehousesPage() {
   const { symbol } = useSettingsStore()
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState<'warehouses' | 'stock'>('warehouses')
+  const [tab, setTab] = useState<'warehouses' | 'stock' | 'requests'>('warehouses')
   const [manualWarehouseId, setManualWarehouseId] = useState<number | null>(null)
   const [search, setSearch] = useState('')
   const [lowStockOnly, setLowStockOnly] = useState(false)
@@ -183,6 +187,43 @@ export default function WarehousesPage() {
   const selectedWarehouseId =
     manualWarehouseId ?? (warehouses?.find((warehouse) => warehouse.is_default)?.id ?? warehouses?.[0]?.id ?? null)
 
+  const { data: stockRequests, refetch: refetchStockRequests } = useQuery({
+    queryKey: ['stock-requests'],
+    queryFn: async () => {
+      const res = await api.get('/stock-requests')
+      return (res.data.data || []) as Array<{
+        id: number
+        from_warehouse_id: number
+        to_warehouse_id: number
+        product_id: number
+        requested_quantity: number
+        approved_quantity?: number | null
+        status: string
+        notes?: string | null
+        fromWarehouse?: { id: number; name: string }
+        toWarehouse?: { id: number; name: string }
+        product?: { id: number; name: string }
+        requester?: { id: number; name: string }
+      }>
+    },
+    enabled: tab === 'requests',
+  })
+
+  const approveStockRequest = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/approve`),
+    onSuccess: () => {
+      refetchStockRequests()
+      toast.success('تمت الموافقة على الطلب')
+    },
+  })
+
+  const rejectStockRequest = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/reject`, { reason: 'مرفوض' }),
+    onSuccess: () => {
+      refetchStockRequests()
+      toast.success('تم رفض الطلب')
+    },
+  })
   const { data: stockData, isLoading: stockLoading } = useQuery({
     queryKey: ['warehouse-stock', selectedWarehouseId, search, lowStockOnly],
     queryFn: async () => {
@@ -245,6 +286,8 @@ export default function WarehousesPage() {
         name: warehouseForm.name.trim(),
         code: warehouseForm.code.trim() || null,
         type: warehouseForm.type,
+        allow_sales: warehouseForm.allow_sales,
+        pos_sale_source: warehouseForm.pos_sale_source || null,
         address: warehouseForm.address.trim() || null,
         phone: warehouseForm.phone.trim() || null,
         is_default: warehouseForm.is_default,
@@ -348,6 +391,8 @@ export default function WarehousesPage() {
       name: warehouse.name,
       code: warehouse.code || '',
       type: warehouse.type || 'store',
+      allow_sales: warehouse.allow_sales ?? true,
+      pos_sale_source: warehouse.pos_sale_source || '',
       address: warehouse.address || '',
       phone: warehouse.phone || '',
       is_default: warehouse.is_default,
@@ -661,6 +706,50 @@ export default function WarehousesPage() {
         </Card>
       )}
 
+        {tab === 'requests' && (
+        <Card className="space-y-4">
+          <h2 className="text-lg font-semibold">طلبات المخزون</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-start text-xs text-gray-500 dark:text-gray-400">
+                  <th className="px-3 py-2">المنتج</th>
+                  <th className="px-3 py-2">من</th>
+                  <th className="px-3 py-2">إلى</th>
+                  <th className="px-3 py-2">الكمية</th>
+                  <th className="px-3 py-2">الحالة</th>
+                  <th className="px-3 py-2">مقدم الطلب</th>
+                  <th className="px-3 py-2">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(stockRequests || []).map((req) => (
+                  <tr key={req.id} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="px-3 py-2">{req.product?.name || req.product_id}</td>
+                    <td className="px-3 py-2">{req.fromWarehouse?.name || req.from_warehouse_id}</td>
+                    <td className="px-3 py-2">{req.toWarehouse?.name || req.to_warehouse_id}</td>
+                    <td className="px-3 py-2">{req.requested_quantity}</td>
+                    <td className="px-3 py-2">{req.status}</td>
+                    <td className="px-3 py-2">{req.requester?.name || '-'}</td>
+                    <td className="px-3 py-2">
+                      {req.status === 'pending' && (
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="success" onClick={() => approveStockRequest.mutate(req.id)}>موافقة</Button>
+                          <Button size="sm" variant="danger" onClick={() => rejectStockRequest.mutate(req.id)}>رفض</Button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {(!stockRequests || stockRequests.length === 0) && (
+                  <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-500">لا توجد طلبات</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
       <Modal
         isOpen={warehouseModalOpen}
         onClose={() => setWarehouseModalOpen(false)}
@@ -699,10 +788,32 @@ export default function WarehousesPage() {
               >
                 <option value="store">مخزن</option>
                 <option value="pos">نقطة بيع</option>
+                 <option value="both">كلاهما</option>
               </select>
             </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">���� ����� (override)</label>
+              <select
+                value={warehouseForm.pos_sale_source}
+                onChange={(event) => setWarehouseForm({ ...warehouseForm, pos_sale_source: event.target.value })}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
+              >
+                <option value="">����� (Global)</option>
+                <option value="store">������ ���</option>
+                <option value="pos">������ ���</option>
+                <option value="both">������</option>
+              </select>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={warehouseForm.allow_sales}
+                onChange={(event) => setWarehouseForm({ ...warehouseForm, allow_sales: event.target.checked })}
+              />
+              ������ ������ �� ��� ������
+            </label>
             <Input
-              label="الهاتف"
+              label="������"
               value={warehouseForm.phone}
               onChange={(event) => setWarehouseForm({ ...warehouseForm, phone: event.target.value })}
             />

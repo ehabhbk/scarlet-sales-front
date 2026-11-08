@@ -27,7 +27,6 @@ import {
   Lock,
   Unlock,
   ChevronDown,
-  Warehouse as WarehouseIcon,
 } from 'lucide-react'
 import Button from '../../components/common/buttons/Button'
 import Modal from '../../components/common/modals/Modal'
@@ -98,6 +97,9 @@ interface WarehouseOption {
   id: number
   name: string
   code?: string | null
+  type?: string | null
+  allow_sales?: boolean
+  pos_sale_source?: string | null
   is_default: boolean
   is_active: boolean
 }
@@ -317,6 +319,7 @@ export default function POSPage() {
     restaurant: restaurantData,
     paymentMethods,
     settingsError,
+    posSaleSource,
   } = useSettingsStore()
   const loadSettings = useSettingsStore((s) => s.load)
 
@@ -1304,6 +1307,33 @@ export default function POSPage() {
                 أجر الموظفين
               </Button>
             )}
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-200">نقطة البيع:</span>
+              <select
+                value={selectedWarehouseId || ''}
+                onChange={(e) => {
+                  setManualWarehouseId(e.target.value ? Number(e.target.value) : null)
+                  setCart([])
+                }}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+              >
+                {(warehouses || [])
+                  .filter((warehouse) => {
+                    if (!warehouse.is_active || !warehouse.allow_sales) return false
+                    const src = (warehouse.pos_sale_source || posSaleSource || 'both') as string
+                    const isStoreType = warehouse.type === 'pos' || warehouse.type === 'both'
+                    const isWhType = warehouse.type === 'store' || warehouse.type === 'both'
+                    if (src === 'store') return isStoreType
+                    if (src === 'warehouse') return isWhType
+                    return true
+                  })
+                  .map((warehouse) => (
+                    <option key={warehouse.id} value={warehouse.id}>
+                      {warehouse.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
             {((openShift && canCloseShift) || (!openShift && can('open_shift'))) && (
               <button
                 type="button"
@@ -1503,33 +1533,6 @@ export default function POSPage() {
               value={customerPhone}
               onChange={(e) => setCustomerPhone(e.target.value)}
             />
-          </div>
-
-          <div className="p-4 border-b border-gray-200 dark:border-gray-800">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
-              المخزن
-            </label>
-            <div className="relative">
-              <WarehouseIcon className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <select
-                value={selectedWarehouseId || ''}
-                onChange={(e) => {
-                  setManualWarehouseId(e.target.value ? Number(e.target.value) : null)
-                  setCart([])
-                }}
-                className="w-full appearance-none rounded-lg border border-gray-300 bg-white py-2 pe-8 ps-9 text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
-              >
-                {(warehouses || []).filter((warehouse) => warehouse.is_active).map((warehouse) => (
-                  <option key={warehouse.id} value={warehouse.id}>
-                    {warehouse.name}{warehouse.code ? ` (${warehouse.code})` : ''}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute end-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            </div>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              يتم خصم الكميات من المخزن المحدد حسب تاريخ الصلاحية (الأقرب انتهاءً أولاً).
-            </p>
           </div>
 
           <div className="p-4 space-y-3">

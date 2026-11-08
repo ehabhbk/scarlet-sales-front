@@ -102,6 +102,9 @@ export interface Warehouse {
   restaurant_id?: number
   name: string
   code?: string | null
+  type?: 'store' | 'pos' | 'both'
+  allow_sales?: boolean
+  pos_sale_source?: 'store' | 'pos' | 'both' | null
   address?: string | null
   phone?: string | null
   is_default: boolean
