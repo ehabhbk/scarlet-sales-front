@@ -1,344 +1,181 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { formatNumber } from '../../utils/format'
-import {
-  AlertTriangle,
-  ArrowLeftRight,
-  Boxes,
-  CalendarClock,
-  Clock,
-  Package,
-  PackagePlus,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Search,
-  ShoppingCart,
-  Trash2,
-  Warehouse as WarehouseIcon,
-} from 'lucide-react'
 import { api } from '../../services/api'
+import { useAuthStore } from '../../store/authStore'
+import { useSettingsStore, formatMoney } from '../../store/settingsStore'
+import { Plus, Search, Edit as PencilIcon, Trash2, ArrowLeftRight, Warehouse, Package, AlertTriangle, Clock } from 'lucide-react'
 import Button from '../../components/common/buttons/Button'
 import Input from '../../components/common/inputs/Input'
-import Badge from '../../components/common/data-display/Badge'
 import Card from '../../components/common/cards/Card'
 import Modal from '../../components/common/modals/Modal'
-import { useSettingsStore, formatMoney, mediaUrl } from '../../store/settingsStore'
-import { formatDate } from '../../utils/format'
+import Badge from '../../components/common/data-display/Badge'
+import { formatNumber } from '../../utils/format'
 import { getApiErrorMessage } from '../../utils/apiError'
+import { useNavigate } from 'react-router-dom'
 
 interface WarehouseRecord {
   id: number
   name: string
   code?: string | null
-  type?: string | null
-  allow_sales?: boolean
-  pos_sale_source?: string | null
+  type: string
+  allow_sales: boolean
   address?: string | null
   phone?: string | null
   is_default: boolean
   is_active: boolean
+  products_count?: number
+  total_quantity?: number
+  stock_value?: number
+  expired_quantity?: number
+  near_expiry_quantity?: number
+}
+
+interface StockRequestForm {
+  from_warehouse_id: number | string
+  to_warehouse_id: number | string
+  product_id: number | string
+  quantity: number | string
+  notes: string
+}
+
+interface RequestRecord {
+  id: number
+  from_warehouse_id: number
+  to_warehouse_id: number
+  product_id: number
+  requested_quantity: number
+  approved_quantity?: number | null
+  status: string
+  requested_by?: number
+  approved_by?: number
+  received_by?: number
   notes?: string | null
-  products_count: number
-  total_quantity: number
-  stock_value: number
-  expired_quantity: number
-  near_expiry_quantity: number
+  fromWarehouse?: { id: number; name: string }
+  toWarehouse?: { id: number; name: string }
+  product?: { id: number; name: string; barcode?: string | null }
+  requester?: { id: number; name: string }
+  approver?: { id: number; name: string }
+  receiver?: { id: number; name: string }
 }
 
-interface StockRow {
+interface ProductRecord {
   id: number
   name: string
   sku?: string | null
   barcode?: string | null
-  image?: string | null
-  category?: { id: number; name: string } | null
   sale_price: number
   cost_price: number
-  track_inventory: boolean
-  stock: number
-  min_stock: number
-  low_stock: boolean
-  expired_quantity: number
-  near_expiry_quantity: number
-  nearest_expiry?: string | null
-  batches_count: number
-}
-
-interface ProductOption {
-  id: number
-  name: string
-  barcode?: string | null
-  sku?: string | null
-  track_inventory?: boolean
-}
-
-interface BatchRecord {
-  id: number
-  batch_number?: string | null
-  quantity: number
-  cost_price: number
-  expiry_date?: string | null
-  received_at?: string | null
-  product?: { id: number; name: string }
-  warehouse?: { id: number; name: string }
-  supplier?: { id: number; name: string } | null
-}
-
-interface AlertSummary {
-  expired_lots: number
-  expired_quantity: number
-  total_loss: number
-  near_expiry_lots: number
-  near_expiry_quantity: number
-  low_stock_products: number
-  total_alerts: number
-}
-
-interface AlertsResponse {
-  summary: AlertSummary
-  expired: Array<{
-    id: number
-    product_name?: string
-    warehouse_name?: string
-    batch_number?: string
-    quantity: number
-    loss: number
-    expiry_date?: string
-    days_overdue?: number
-  }>
-  near_expiry: Array<{
-    id: number
-    product_name?: string
-    warehouse_name?: string
-    batch_number?: string
-    quantity: number
-    value: number
-    expiry_date?: string
-    days_left?: number
-  }>
-  low_stock: Array<{
-    id: number
-    name: string
-    stock: number
-    threshold: number
-    shortage: number
-  }>
-}
-
-const EMPTY_WAREHOUSE = {
-  name: '',
-  code: '',
-  type: 'store',
-  allow_sales: true,
-  pos_sale_source: '',
-  address: '',
-  phone: '',
-  is_default: false,
-  is_active: true,
-  notes: '',
-}
-
-type WarehouseForm = typeof EMPTY_WAREHOUSE
-
-interface WarehouseProduct {
-  id: number
-  name: string
-  sku?: string | null
-  barcode?: string | null
-  category?: { name: string } | string
-  sale_price: number
-  cost_price: number
-  current_stock: number
+  current_stock?: number
   min_stock?: number
   sale_unit?: string | null
   purchase_unit?: string | null
   total_stock?: number
+  nearest_expiry?: string | null
   is_available: boolean
   image?: string | null
-}
-
-const EMPTY_PRODUCT_FORM = {
-  name: '',
-  sku: '',
-  barcode: '',
-  sale_price: '',
-  cost_price: '',
-  min_stock: '',
-  sale_unit: '',
-  purchase_unit: '',
-  is_available: true,
-}
-
-type ProductForm = typeof EMPTY_PRODUCT_FORM
-
-const EMPTY_STOCK_IN = {
-  warehouse_id: '',
-  product_id: '',
-  quantity: '',
-  cost_price: '',
-  expiry_date: '',
-  batch_number: '',
-  notes: '',
+  low_stock?: boolean
+  expired_quantity?: number
+  near_expiry_quantity?: number
 }
 
 export default function WarehousesPage() {
   const { symbol } = useSettingsStore()
-  const queryClient = useQueryClient()
-  const [tab, setTab] = useState<'warehouses' | 'stock' | 'products' | 'requests'>('warehouses')
-  const [manualWarehouseId, setManualWarehouseId] = useState<number | null>(null)
-  const [search, setSearch] = useState('')
-  const [lowStockOnly, setLowStockOnly] = useState(false)
-  const [warehouseModalOpen, setWarehouseModalOpen] = useState(false)
+  const permissions = useAuthStore((state) => state.user?.permissions || [])
+  const canViewWarehouses = permissions.includes('view_warehouses')
+  const canCreateWarehouses = permissions.includes('create_warehouses')
+  const canEditWarehouses = permissions.includes('edit_warehouses')
+  const canDeleteWarehouses = permissions.includes('delete_warehouses')
+  const canManageStock = permissions.includes('manage_stock')
+
+  const [tab, setTab] = useState<'warehouses' | 'requests'>('warehouses')
+  const [showModal, setShowModal] = useState(false)
+  const [showRequestModal, setShowRequestModal] = useState(false)
   const [editingWarehouse, setEditingWarehouse] = useState<WarehouseRecord | null>(null)
-  const [warehouseForm, setWarehouseForm] = useState<WarehouseForm>(EMPTY_WAREHOUSE)
-  const [stockInOpen, setStockInOpen] = useState(false)
-  const [stockInForm, setStockInForm] = useState({ ...EMPTY_STOCK_IN })
-  const [transferOpen, setTransferOpen] = useState(false)
-  const [transferForm, setTransferForm] = useState({
+  const [requestingWarehouse, setRequestingWarehouse] = useState<WarehouseRecord | null>(null)
+  const [requestForm, setRequestForm] = useState<StockRequestForm>({
     from_warehouse_id: '',
     to_warehouse_id: '',
     product_id: '',
     quantity: '',
     notes: '',
   })
-  const [batchesProduct, setBatchesProduct] = useState<StockRow | null>(null)
-  const [adjustForm, setAdjustForm] = useState<{ batch_id: string; quantity: string; notes: string }>({
-    batch_id: '',
-    quantity: '',
-    notes: '',
-  })
-  const [productModalOpen, setProductModalOpen] = useState(false)
-  const [editingProduct, setEditingProduct] = useState<WarehouseProduct | null>(null)
-  const [productForm, setProductForm] = useState<ProductForm>(EMPTY_PRODUCT_FORM)
+  const [warehouseSearch, setWarehouseSearch] = useState('')
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const { data: warehouses, isLoading: warehousesLoading } = useQuery({
     queryKey: ['warehouses'],
     queryFn: async () => {
-      const res = await api.get('/warehouses')
+      const res = await api.get('/warehouses?type=warehouse')
       return (res.data.warehouses || []) as WarehouseRecord[]
     },
+    enabled: canViewWarehouses,
   })
 
-  const selectedWarehouseId =
-    manualWarehouseId ?? (warehouses?.find((warehouse) => warehouse.is_default)?.id ?? warehouses?.[0]?.id ?? null)
+  const { data: allWarehouses } = useQuery({
+    queryKey: ['all-warehouses-for-request'],
+    queryFn: async () => {
+      const res = await api.get('/warehouses?type=warehouse')
+      return (res.data.warehouses || []) as WarehouseRecord[]
+    },
+    enabled: canManageStock,
+  })
 
-  const { data: warehouseProducts, isLoading: warehouseProductsLoading } = useQuery({
+  const { data: products } = useQuery({
     queryKey: ['warehouse-products'],
     queryFn: async () => {
-      const res = await api.get('/products?per_page=200')
-      return (res.data.data || []) as WarehouseProduct[]
+      const res = await api.get('/products?per_page=1000')
+      return (res.data.data || []) as ProductRecord[]
     },
-    enabled: tab === 'products',
   })
 
-  const { data: stockRequests, refetch: refetchStockRequests } = useQuery({
-    queryKey: ['stock-requests'],
+  const { data: requests, refetch: refetchRequests } = useQuery({
+    queryKey: ['warehouse-stock-requests'],
     queryFn: async () => {
       const res = await api.get('/stock-requests')
-      return (res.data.data || []) as Array<{
-        id: number
-        from_warehouse_id: number
-        to_warehouse_id: number
-        product_id: number
-        requested_quantity: number
-        approved_quantity?: number | null
-        status: string
-        notes?: string | null
-        fromWarehouse?: { id: number; name: string }
-        toWarehouse?: { id: number; name: string }
-        product?: { id: number; name: string }
-        requester?: { id: number; name: string }
-      }>
+      return (res.data.data || []) as RequestRecord[]
     },
     enabled: tab === 'requests',
   })
 
-  const approveStockRequest = useMutation({
-    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/approve`),
-    onSuccess: () => {
-      refetchStockRequests()
-      toast.success('تمت الموافقة على الطلب')
-    },
-  })
+  // Stats
+  const totalWarehouses = useMemo(() => warehouses?.length || 0, [warehouses])
+  const totalProducts = useMemo(() => {
+    if (!products) return 0
+    return products.length
+  }, [products])
+  const totalQuantity = useMemo(() => {
+    return products?.reduce((sum, p) => sum + Number(p.total_stock ?? p.current_stock ?? 0), 0) || 0
+  }, [products])
+  const stockValue = useMemo(() => {
+    return products?.reduce((sum, p) => sum + Number(p.total_stock ?? p.current_stock ?? 0) * Number(p.cost_price), 0) || 0
+  }, [products])
+  const nearExpiryCount = useMemo(() => {
+    return products?.filter((p) => (p.near_expiry_quantity || 0) > 0).length || 0
+  }, [products])
+  const lowStockCount = useMemo(() => {
+    return products?.filter((p) => (p.low_stock || false)).length || 0
+  }, [products])
 
-  const rejectStockRequest = useMutation({
-    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/reject`, { reason: 'مرفوض' }),
-    onSuccess: () => {
-      refetchStockRequests()
-      toast.success('تم رفض الطلب')
-    },
-  })
-  const { data: stockData, isLoading: stockLoading } = useQuery({
-    queryKey: ['warehouse-stock', selectedWarehouseId, search, lowStockOnly],
-    queryFn: async () => {
-      const res = await api.get('/warehouse-stock', {
-        params: {
-          warehouse_id: selectedWarehouseId || undefined,
-          search: search || undefined,
-          low_stock: lowStockOnly ? 1 : undefined,
-          per_page: 100,
-        },
-      })
-      return (res.data.data || []) as StockRow[]
-    },
-    enabled: tab === 'stock',
-  })
+  const filteredWarehouses = useMemo(() => {
+    if (!warehouses) return []
+    return warehouses.filter((w) => w.name.toLowerCase().includes(warehouseSearch.toLowerCase()))
+  }, [warehouses, warehouseSearch])
 
-  const { data: alerts } = useQuery({
-    queryKey: ['product-alerts'],
-    queryFn: async () => {
-      const res = await api.get('/product-alerts')
-      return res.data as AlertsResponse
-    },
-    refetchInterval: 60000,
-  })
-
-  const { data: products } = useQuery({
-    queryKey: ['products-for-select'],
-    queryFn: async () => {
-      const res = await api.get('/products', { params: { per_page: 200 } })
-      return (res.data.data || []) as ProductOption[]
-    },
-  })
-
-  const { data: batches, refetch: refetchBatches } = useQuery({
-    queryKey: ['product-batches', selectedWarehouseId, batchesProduct?.id],
-    queryFn: async () => {
-      const res = await api.get('/product-batches', {
-        params: {
-          warehouse_id: selectedWarehouseId || undefined,
-          product_id: batchesProduct?.id,
-          in_stock: 1,
-          per_page: 100,
-        },
-      })
-      return (res.data.data || []) as BatchRecord[]
-    },
-    enabled: !!batchesProduct,
-  })
-
-  const refreshAll = () => {
-    queryClient.invalidateQueries({ queryKey: ['warehouses'] })
-    queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
-    queryClient.invalidateQueries({ queryKey: ['product-alerts'] })
-    queryClient.invalidateQueries({ queryKey: ['products'] })
-  }
 
   const saveWarehouseMutation = useMutation({
     mutationFn: async () => {
       const payload = {
-        name: warehouseForm.name.trim(),
-        code: warehouseForm.code.trim() || null,
-        type: warehouseForm.type,
-        allow_sales: warehouseForm.allow_sales,
-        pos_sale_source: warehouseForm.pos_sale_source || null,
-        address: warehouseForm.address.trim() || null,
-        phone: warehouseForm.phone.trim() || null,
-        is_default: warehouseForm.is_default,
-        is_active: warehouseForm.is_active,
-        notes: warehouseForm.notes.trim() || null,
+        name: editingWarehouse?.name || '',
+        code: '',
+        type: 'warehouse',
+        allow_sales: true,
+        address: '',
+        phone: '',
+        is_default: false,
+        is_active: true,
+        notes: '',
       }
       if (editingWarehouse) {
         await api.put(`/warehouses/${editingWarehouse.id}`, payload)
@@ -347,564 +184,185 @@ export default function WarehousesPage() {
       }
     },
     onSuccess: () => {
-      toast.success(editingWarehouse ? 'تم تحديث المخزن' : 'تم إضافة المخزن')
-      setWarehouseModalOpen(false)
+      toast.success('تم حفظ المخزن')
+      setShowModal(false)
       setEditingWarehouse(null)
-      setWarehouseForm(EMPTY_WAREHOUSE)
-      refreshAll()
+      queryClient.invalidateQueries({ queryKey: ['warehouses'] })
+      queryClient.invalidateQueries({ queryKey: ['all-warehouses-for-request'] })
     },
     onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر حفظ المخزن')),
   })
 
-  const deleteWarehouseMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await api.delete(`/warehouses/${id}`)
+  const createRequestMutation = useMutation({
+    mutationFn: async (data: StockRequestForm) => {
+      await api.post('/stock-requests', {
+        from_warehouse_id: Number(data.from_warehouse_id),
+        to_warehouse_id: Number(data.to_warehouse_id),
+        product_id: Number(data.product_id),
+        quantity: Number(data.quantity),
+        notes: data.notes || undefined,
+      })
     },
     onSuccess: () => {
+      toast.success('تم إرسال طلب المخزون')
+      setShowRequestModal(false)
+      setRequestForm({ from_warehouse_id: '', to_warehouse_id: '', product_id: '', quantity: '', notes: '' })
+      refetchRequests()
+      queryClient.invalidateQueries({ queryKey: ['stock-requests'] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر إرسال الطلب')),
+  })
+
+  const approveRequestMutation = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/approve`),
+    onSuccess: () => {
+      toast.success('تمت الموافقة على الطلب')
+      refetchRequests()
+    },
+  })
+
+  const receiveRequestMutation = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/receive`),
+    onSuccess: () => {
+      toast.success('تم استلام الكمية وترحيلها إلى المخزن')
+      refetchRequests()
+    },
+  })
+
+  const deleteWarehouseMutation = useMutation({
+    mutationFn: async (id: number) => api.delete(`/warehouses/${id}`),
+    onSuccess: () => {
       toast.success('تم حذف المخزن')
-      refreshAll()
+      queryClient.invalidateQueries({ queryKey: ['warehouses'] })
     },
     onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر حذف المخزن')),
   })
 
-  const stockInMutation = useMutation({
-    mutationFn: async () => {
-      await api.post('/warehouse-stock/in', {
-        warehouse_id: Number(stockInForm.warehouse_id),
-        product_id: Number(stockInForm.product_id),
-        quantity: Number(stockInForm.quantity),
-        cost_price: stockInForm.cost_price ? Number(stockInForm.cost_price) : undefined,
-        expiry_date: stockInForm.expiry_date || undefined,
-        batch_number: stockInForm.batch_number.trim() || undefined,
-        notes: stockInForm.notes.trim() || undefined,
-      })
-    },
-    onSuccess: () => {
-      toast.success('تم إدخال المخزون')
-      setStockInOpen(false)
-      setStockInForm({ ...EMPTY_STOCK_IN })
-      refreshAll()
-      void refetchBatches()
-    },
-    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر إدخال المخزون')),
-  })
-
-  const transferMutation = useMutation({
-    mutationFn: async () => {
-      await api.post('/warehouse-stock/transfer', {
-        from_warehouse_id: Number(transferForm.from_warehouse_id),
-        to_warehouse_id: Number(transferForm.to_warehouse_id),
-        product_id: Number(transferForm.product_id),
-        quantity: Number(transferForm.quantity),
-        notes: transferForm.notes.trim() || undefined,
-      })
-    },
-    onSuccess: () => {
-      toast.success('تم تحويل المخزون')
-      setTransferOpen(false)
-      setTransferForm({ from_warehouse_id: '', to_warehouse_id: '', product_id: '', quantity: '', notes: '' })
-      refreshAll()
-    },
-    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تحويل المخزون')),
-  })
-
-  const adjustMutation = useMutation({
-    mutationFn: async () => {
-      await api.post('/warehouse-stock/adjust', {
-        batch_id: Number(adjustForm.batch_id),
-        quantity: Number(adjustForm.quantity),
-        notes: adjustForm.notes.trim() || undefined,
-      })
-    },
-    onSuccess: () => {
-      toast.success('تم تعديل كمية الدفعة')
-      setAdjustForm({ batch_id: '', quantity: '', notes: '' })
-      refreshAll()
-      void refetchBatches()
-    },
-    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تعديل الكمية')),
-  })
-
-  const saveProductMutation = useMutation({
-    mutationFn: async () => {
-      if (editingProduct) {
-        await api.put(`/products/${editingProduct.id}`, productForm)
-      } else {
-        await api.post('/products', productForm)
-      }
-    },
-    onSuccess: () => {
-      toast.success('تم حفظ المنتج')
-      setProductModalOpen(false)
-      void queryClient.invalidateQueries({ queryKey: ['warehouse-products'] })
-      void queryClient.invalidateQueries({ queryKey: ['products'] })
-    },
-    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر حفظ المنتج')),
-  })
-
-  const deleteProductMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await api.delete(`/products/${id}`)
-    },
-    onSuccess: () => {
-      toast.success('تم حذف المنتج')
-      void queryClient.invalidateQueries({ queryKey: ['warehouse-products'] })
-      void queryClient.invalidateQueries({ queryKey: ['products'] })
-    },
-  })
-
-  const openCreateWarehouse = () => {
-    setEditingWarehouse(null)
-    setWarehouseForm(EMPTY_WAREHOUSE)
-    setWarehouseModalOpen(true)
-  }
-
-  const openEditWarehouse = (warehouse: WarehouseRecord) => {
-    setEditingWarehouse(warehouse)
-    setWarehouseForm({
-      name: warehouse.name,
-      code: warehouse.code || '',
-      type: warehouse.type || 'store',
-      allow_sales: warehouse.allow_sales ?? true,
-      pos_sale_source: warehouse.pos_sale_source || '',
-      address: warehouse.address || '',
-      phone: warehouse.phone || '',
-      is_default: warehouse.is_default,
-      is_active: warehouse.is_active,
-      notes: warehouse.notes || '',
-    })
-    setWarehouseModalOpen(true)
-  }
-
-  const openStockIn = (warehouseId?: number, productId?: number) => {
-    setStockInForm({
-      ...EMPTY_STOCK_IN,
-      warehouse_id: String(warehouseId || selectedWarehouseId || ''),
-      product_id: productId ? String(productId) : '',
-    })
-    setStockInOpen(true)
-  }
-
-  const openTransfer = (productId?: number) => {
-    setTransferForm({
-      from_warehouse_id: String(selectedWarehouseId || ''),
-      to_warehouse_id: '',
-      product_id: productId ? String(productId) : '',
-      quantity: '',
-      notes: '',
-    })
-    setTransferOpen(true)
-  }
-
-  const summary = alerts?.summary
-  const totalStockValue = useMemo(
-    () => (warehouses || []).reduce((sum, warehouse) => sum + Number(warehouse.stock_value || 0), 0),
-    [warehouses]
-  )
-
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">المخازن والأرصدة</h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            إدارة المخازن، إدخال البضاعة، التحويل بين المخازن ومتابعة تواريخ الصلاحية.
-          </p>
+      {/* Stats Bar */}
+      <Card className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">المخازن</h1>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              إدارة المخازن والمستودعات وطلب المنتجات بين المخازن بناءً على الصلاحيات الممنوحة.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {canCreateWarehouses && <Button onClick={() => { setEditingWarehouse(null); setShowModal(true) }}><Plus className="w-4 h-4" /> إضافة مخزن</Button>}
+            {canManageStock && <Button onClick={() => { setRequestingWarehouse(null); setShowRequestModal(true) }}>طلب من المخزن</Button>}
+            {canViewWarehouses && tab === 'warehouses' && <Button onClick={() => setTab('requests')}>طلبات المخزون</Button>}
+            {tab === 'requests' && <Button onClick={() => setTab('warehouses')}>إدارة المخازن</Button>}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" onClick={refreshAll}>
-            <RefreshCw className="w-4 h-4" />
-            تحديث
-          </Button>
-          <Button onClick={openCreateWarehouse}>
-            <Plus className="w-4 h-4" />
-            إضافة مخزن
-          </Button>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+          <StatCard label="إجمالي المخازن" value={formatNumber(totalWarehouses)} icon={<Warehouse className="h-5 w-5" />} tone="blue" />
+          <StatCard label="إجمالي المنتجات" value={formatNumber(totalProducts)} icon={<Package className="h-5 w-5" />} tone="emerald" />
+          <StatCard label="إجمالي الكمية" value={formatNumber(totalQuantity)} icon={<Package className="h-5 w-5" />} tone="emerald" />
+          <StatCard label="قيمة المخزون" value={formatMoney(stockValue, symbol)} icon={<Clock className="h-5 w-5" />} tone="amber" />
+          <StatCard label="قريب الانتهاء" value={formatNumber(nearExpiryCount)} icon={<Clock className="h-5 w-5" />} tone="amber" />
+          <StatCard label="قريب النفاذ" value={formatNumber(lowStockCount)} icon={<AlertTriangle className="h-5 w-5" />} tone="red" />
         </div>
-      </div>
+      </Card>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard
-          icon={<WarehouseIcon className="h-5 w-5" />}
-          label="عدد المخازن"
-          value={String(warehouses?.length || 0)}
-          tone="blue"
-        />
-        <SummaryCard
-          icon={<Boxes className="h-5 w-5" />}
-          label="قيمة المخزون"
-          value={formatMoney(totalStockValue, symbol)}
-          tone="emerald"
-        />
-        <SummaryCard
-          icon={<AlertTriangle className="h-5 w-5" />}
-          label="كمية منتهية الصلاحية"
-          value={String(summary?.expired_quantity ?? 0)}
-          hint={`خسائر: ${formatMoney(summary?.total_loss || 0, symbol)}`}
-          tone="red"
-        />
-        <SummaryCard
-          icon={<CalendarClock className="h-5 w-5" />}
-          label="قريبة الانتهاء"
-          value={String(summary?.near_expiry_quantity ?? 0)}
-          hint={`${summary?.low_stock_products || 0} منتج قارب على النفاد`}
-          tone="amber"
-        />
-      </div>
-
-      <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700">
-        <TabButton active={tab === 'warehouses'} onClick={() => setTab('warehouses')}>
-          <WarehouseIcon className="h-4 w-4" />
-          المخازن
-        </TabButton>
-        <TabButton active={tab === 'stock'} onClick={() => setTab('stock')}>
-          <Package className="h-4 w-4" />
-          الأرصدة والدفعات
-        </TabButton>
-        <TabButton active={tab === 'products'} onClick={() => setTab('products')}>
-          <ShoppingCart className="h-4 w-4" />
-          المنتجات
-        </TabButton>
-      </div>
-
-      {tab === 'warehouses' && (
-        <div className="space-y-6">
-          {warehousesLoading ? (
-            <Card><p className="py-8 text-center text-sm text-gray-500">جارٍ تحميل المخازن...</p></Card>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {(warehouses || []).map((warehouse) => (
-                <Card key={warehouse.id} className="space-y-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                        <WarehouseIcon className="h-5 w-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="truncate font-semibold text-gray-900 dark:text-gray-100">{warehouse.name}</h3>
-                          {warehouse.is_default && (
-                            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
-                              افتراضي
-                            </span>
-                          )}
-                          {!warehouse.is_active && (
-                            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500 dark:bg-gray-800">
-                              موقوف
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-500">
-                          {warehouse.code || 'بدون رمز'} · {warehouse.type === 'pos' ? 'نقطة بيع' : 'مخزن'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      <button
-                        type="button"
-                        onClick={() => openEditWarehouse(warehouse)}
-                        className="rounded-lg p-2 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/40"
-                        title="تعديل"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm(`هل تريد حذف المخزن ${warehouse.name}؟`)) {
-                            deleteWarehouseMutation.mutate(warehouse.id)
-                          }
-                        }}
-                        className="rounded-lg p-2 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
-                        title="حذف"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <Stat label="عدد المنتجات" value={String(warehouse.products_count)} />
-                    <Stat label="إجمالي الكمية" value={String(warehouse.total_quantity)} />
-                    <Stat label="قيمة المخزون" value={formatMoney(warehouse.stock_value, symbol)} />
-                    <Stat label="منتهي الصلاحية" value={String(warehouse.expired_quantity)} danger={warehouse.expired_quantity > 0} />
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => { setManualWarehouseId(warehouse.id); openStockIn(warehouse.id) }}>
-                      <PackagePlus className="h-4 w-4" />
-                      إدخال مخزون
-                    </Button>
-                    <Button size="sm" variant="secondary" onClick={() => { setManualWarehouseId(warehouse.id); setTab('stock') }}>
-                      <Package className="h-4 w-4" />
-                      عرض الأرصدة
-                    </Button>
-                  </div>
-                </Card>
-              ))}
-              {!warehouses?.length && (
-                <Card className="md:col-span-2 xl:col-span-3">
-                  <p className="py-8 text-center text-sm text-gray-500">لا توجد مخازن بعد. أضف أول مخزن للبدء.</p>
-                </Card>
-              )}
-            </div>
-          )}
-
-          <AlertsPanel alerts={alerts} symbol={symbol} />
-        </div>
-      )}
-
-      {tab === 'stock' && (
-        <Card className="space-y-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-2xl">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">المخزن</label>
-                <select
-                  value={selectedWarehouseId || ''}
-                  onChange={(event) => setManualWarehouseId(Number(event.target.value) || null)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-                >
-                  <option value="">كل المخازن</option>
-                  {(warehouses || []).map((warehouse) => (
-                    <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
-                  ))}
-                </select>
-              </div>
-              <Input
-                placeholder="بحث بالاسم أو الباركود..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                icon={<Search className="h-4 w-4" />}
+      {tab === 'warehouses' && canViewWarehouses && (
+        <Card className="space-y-6">
+          {/* Warehouse Search */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="relative">
+              <Search className="absolute start-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="بحث عن مخزن..."
+                value={warehouseSearch}
+                onChange={(e) => setWarehouseSearch(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white py-2.5 pe-10 ps-10 text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
               />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <input
-                  type="checkbox"
-                  checked={lowStockOnly}
-                  onChange={(event) => setLowStockOnly(event.target.checked)}
-                />
-                نواقص فقط
-              </label>
-              <Button variant="secondary" onClick={() => openStockIn()}>
-                <PackagePlus className="h-4 w-4" />
-                إدخال مخزون
-              </Button>
-              <Button variant="secondary" onClick={() => openTransfer()}>
-                <ArrowLeftRight className="h-4 w-4" />
-                تحويل
-              </Button>
             </div>
           </div>
 
+          {/* Warehouses Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            {warehousesLoading ? (
+              <div className="col-span-full py-12 text-center">
+                <p className="text-sm text-gray-500">جارٍ تحميل المخازن...</p>
+              </div>
+            ) : (
+              <>
+                {filteredWarehouses.length === 0 && (
+                  <div className="col-span-full py-12 text-center">
+                    <p className="text-sm text-gray-500">لا توجد مخازن</p>
+                  </div>
+                )}
+                {filteredWarehouses.map((warehouse) => (
+                  <WarehouseCard
+                    key={warehouse.id}
+                    warehouse={warehouse}
+                    onEdit={() => { setEditingWarehouse(warehouse); setShowModal(true) }}
+                    onDelete={() => deleteWarehouseMutation.mutate(warehouse.id)}
+                    onRequest={() => { setRequestingWarehouse(warehouse); setShowRequestModal(true) }}
+                    onView={() => navigate(`/warehouses/${warehouse.id}`)}
+                    canEdit={canEditWarehouses}
+                    canDelete={canDeleteWarehouses}
+                    canRequest={canManageStock}
+                  />
+                ))}
+              </>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {tab === 'requests' && (
+        <Card className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">طلبات المخزون</h2>
+            <Badge variant="info">{requests?.length || 0} طلب</Badge>
+          </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-start text-xs text-gray-500 dark:border-gray-700">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-800">
+                <tr>
                   <th className="px-3 py-2 text-start">المنتج</th>
-                  <th className="px-3 py-2 text-start">الباركود</th>
-                  <th className="px-3 py-2 text-start">الرصيد</th>
-                  <th className="px-3 py-2 text-start">حد التنبيه</th>
-                  <th className="px-3 py-2 text-start">أقرب صلاحية</th>
-                  <th className="px-3 py-2 text-start">منتهي</th>
-                  <th className="px-3 py-2 text-start">قريب الانتهاء</th>
-                  <th className="px-3 py-2 text-start">الدفعات</th>
+                  <th className="px-3 py-2 text-start">من المخزن</th>
+                  <th className="px-3 py-2 text-start">إلى المخزن</th>
+                  <th className="px-3 py-2 text-start">الكمية المطلوبة</th>
+                  <th className="px-3 py-2 text-start">الحالة</th>
+                  <th className="px-3 py-2 text-start">مقدم الطلب</th>
                   <th className="px-3 py-2 text-start">إجراءات</th>
                 </tr>
               </thead>
               <tbody>
-                {stockLoading && (
-                  <tr><td colSpan={9} className="px-3 py-8 text-center text-gray-500">جارٍ تحميل الأرصدة...</td></tr>
-                )}
-                {!stockLoading && !stockData?.length && (
-                  <tr><td colSpan={9} className="px-3 py-8 text-center text-gray-500">لا توجد أرصدة مطابقة</td></tr>
-                )}
-                {(stockData || []).map((row) => (
-                  <tr key={row.id} className="border-b border-gray-100 dark:border-gray-800">
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        {row.image ? (
-                          <img src={mediaUrl(row.image)} alt="" className="h-8 w-8 rounded object-cover" />
-                        ) : (
-                          <span className="flex h-8 w-8 items-center justify-center rounded bg-gray-100 text-gray-400 dark:bg-gray-800">
-                            <Package className="h-4 w-4" />
-                          </span>
-                        )}
-                        <div>
-                          <p className="font-medium text-gray-900 dark:text-gray-100">{row.name}</p>
-                          <p className="text-xs text-gray-500">{row.category?.name || '-'}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-gray-600 dark:text-gray-300">{row.barcode || row.sku || '-'}</td>
-                    <td className="px-3 py-2">
-                      <span className={`rounded px-2 py-1 text-xs ${row.low_stock ? 'bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300'}`}>
-                        {row.stock}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-300">{row.min_stock}</td>
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-300">{row.nearest_expiry ? formatDate(row.nearest_expiry) : '-'}</td>
-                    <td className="px-3 py-2 text-red-600 dark:text-red-400">{row.expired_quantity || '-'}</td>
-                    <td className="px-3 py-2 text-amber-600 dark:text-amber-400">{row.near_expiry_quantity || '-'}</td>
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-300">{row.batches_count}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1">
-                        <button
-                          type="button"
-                          onClick={() => openStockIn(selectedWarehouseId || undefined, row.id)}
-                          className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
-                          title="إدخال مخزون"
-                        >
-                          <PackagePlus className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openTransfer(row.id)}
-                          className="rounded-lg p-1.5 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/40"
-                          title="تحويل بين المخازن"
-                        >
-                          <ArrowLeftRight className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setBatchesProduct(row)}
-                          className="rounded-lg p-1.5 text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-950/40"
-                          title="الدفعات"
-                        >
-                          <Boxes className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-
-      {tab === 'products' && (
-        <Card className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">إدارة المنتجات</h2>
-              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                إضافة وتعديل وحذف المنتجات، وتحديد المخزن الافتراضي للتخزين.
-              </p>
-            </div>
-            <Button onClick={() => { setEditingProduct(null); setProductForm(EMPTY_PRODUCT_FORM); setProductModalOpen(true) }}>
-              <Plus className="w-4 h-4" /> إضافة منتج
-            </Button>
-          </div>
-          {warehouseProductsLoading ? (
-            <p className="py-8 text-center text-sm text-gray-500">جارٍ تحميل المنتجات...</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 dark:bg-gray-800">
-                  <tr>
-                    <th className="px-3 py-2 text-start">المنتج</th>
-                    <th className="px-3 py-2 text-start">الباركود / SKU</th>
-                    <th className="px-3 py-2 text-start">المخزون</th>
-                    <th className="px-3 py-2 text-start">الحد الأدنى</th>
-                    <th className="px-3 py-2 text-start">سعر البيع</th>
-                    <th className="px-3 py-2 text-start">الحالة</th>
-                    <th className="px-3 py-2 text-start">إجراءات</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(warehouseProducts || []).map((product) => (
-                    <tr key={product.id} className="border-b border-gray-100 dark:border-gray-800">
-                      <td className="px-3 py-2 font-medium">{product.name}</td>
-                      <td className="px-3 py-2 text-gray-600 dark:text-gray-300">{product.barcode || product.sku || '-'}</td>
-                      <td className="px-3 py-2">
-                        <span className={`px-2 py-0.5 rounded text-xs ${Number(product.total_stock ?? 0) <= Number(product.min_stock ?? 0) && Number(product.min_stock ?? 0) > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                          {formatNumber(Number(product.total_stock ?? 0))}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">{formatNumber(Number(product.min_stock ?? 0))}</td>
-                      <td className="px-3 py-2">{formatMoney(product.sale_price, symbol)}</td>
-                      <td className="px-3 py-2">{product.is_available ? <Badge variant="success">متوفر</Badge> : <Badge variant="default">غير متاح</Badge>}</td>
-                      <td className="px-3 py-2 flex gap-2">
-                        <button
-                          onClick={() => {
-                            setEditingProduct(product)
-                            setProductForm({
-                              name: product.name,
-                              sku: product.sku || '',
-                              barcode: product.barcode || '',
-                              sale_price: String(product.sale_price),
-                              cost_price: String(product.cost_price),
-                              min_stock: String(product.min_stock ?? 0),
-                              sale_unit: product.sale_unit || '',
-                              purchase_unit: product.purchase_unit || '',
-                              is_available: product.is_available,
-                            })
-                            setProductModalOpen(true)
-                          }}
-                          className="p-1 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded"
-                          title="تعديل"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => deleteProductMutation.mutate(product.id)}
-                          className="p-1 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded"
-                          title="حذف"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {!warehouseProducts?.length && (
-                    <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-500">لا توجد منتجات</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      )}
-
-        {tab === 'requests' && (
-        <Card className="space-y-4">
-          <h2 className="text-lg font-semibold">طلبات المخزون</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-start text-xs text-gray-500 dark:text-gray-400">
-                  <th className="px-3 py-2">المنتج</th>
-                  <th className="px-3 py-2">من</th>
-                  <th className="px-3 py-2">إلى</th>
-                  <th className="px-3 py-2">الكمية</th>
-                  <th className="px-3 py-2">الحالة</th>
-                  <th className="px-3 py-2">مقدم الطلب</th>
-                  <th className="px-3 py-2">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(stockRequests || []).map((req) => (
+                {(requests || []).map((req) => (
                   <tr key={req.id} className="border-b border-gray-100 dark:border-gray-800">
                     <td className="px-3 py-2">{req.product?.name || req.product_id}</td>
                     <td className="px-3 py-2">{req.fromWarehouse?.name || req.from_warehouse_id}</td>
                     <td className="px-3 py-2">{req.toWarehouse?.name || req.to_warehouse_id}</td>
-                    <td className="px-3 py-2">{req.requested_quantity}</td>
-                    <td className="px-3 py-2">{req.status}</td>
+                    <td className="px-3 py-2">{formatNumber(req.requested_quantity)}</td>
+                    <td className="px-3 py-2">
+                      <Badge
+                        variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : req.status === 'completed' ? 'info' : 'danger'}
+                      >
+                        {req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'معتمد' : req.status === 'completed' ? 'مكتمل' : 'مرفوض'}
+                      </Badge>
+                    </td>
                     <td className="px-3 py-2">{req.requester?.name || '-'}</td>
                     <td className="px-3 py-2">
                       {req.status === 'pending' && (
-                        <div className="flex gap-2">
-                          <Button size="sm" variant="success" onClick={() => approveStockRequest.mutate(req.id)}>موافقة</Button>
-                          <Button size="sm" variant="danger" onClick={() => rejectStockRequest.mutate(req.id)}>رفض</Button>
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="success" onClick={() => approveRequestMutation.mutate(req.id)}>موافقة</Button>
                         </div>
+                      )}
+                      {req.status === 'approved' && (
+                        <Button size="sm" variant="primary" onClick={() => receiveRequestMutation.mutate(req.id)}>استلام</Button>
                       )}
                     </td>
                   </tr>
                 ))}
-                {(!stockRequests || stockRequests.length === 0) && (
-                  <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-500">لا توجد طلبات</td></tr>
+                {!requests?.length && (
+                  <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-500">لا توجد طلبات</td></tr>
                 )}
               </tbody>
             </table>
@@ -912,603 +370,159 @@ export default function WarehousesPage() {
         </Card>
       )}
 
+      {/* Add/Edit Warehouse Modal */}
       <Modal
-        isOpen={warehouseModalOpen}
-        onClose={() => setWarehouseModalOpen(false)}
+        isOpen={showModal}
+        onClose={() => { setShowModal(false); setEditingWarehouse(null) }}
         title={editingWarehouse ? 'تعديل مخزن' : 'إضافة مخزن'}
       >
         <form
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault()
-            if (!warehouseForm.name.trim()) {
-              toast.error('أدخل اسم المخزن')
-              return
-            }
             saveWarehouseMutation.mutate()
           }}
         >
           <Input
             label="اسم المخزن"
-            value={warehouseForm.name}
-            onChange={(event) => setWarehouseForm({ ...warehouseForm, name: event.target.value })}
+            value={editingWarehouse?.name || ''}
+            onChange={() => { }}
             required
           />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Input
-              label="الرمز"
-              placeholder="MAIN"
-              value={warehouseForm.code}
-              onChange={(event) => setWarehouseForm({ ...warehouseForm, code: event.target.value })}
-            />
-            <div>
-              <label className="mb-1 block text-sm font-medium">النوع</label>
-              <select
-                value={warehouseForm.type}
-                onChange={(event) => setWarehouseForm({ ...warehouseForm, type: event.target.value })}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-              >
-                <option value="store">مخزن</option>
-                <option value="pos">نقطة بيع</option>
-                 <option value="both">كلاهما</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium">���� ����� (override)</label>
-              <select
-                value={warehouseForm.pos_sale_source}
-                onChange={(event) => setWarehouseForm({ ...warehouseForm, pos_sale_source: event.target.value })}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-              >
-                <option value="">����� (Global)</option>
-                <option value="store">������ ���</option>
-                <option value="pos">������ ���</option>
-                <option value="both">������</option>
-              </select>
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={warehouseForm.allow_sales}
-                onChange={(event) => setWarehouseForm({ ...warehouseForm, allow_sales: event.target.checked })}
-              />
-              ������ ������ �� ��� ������
-            </label>
-            <Input
-              label="������"
-              value={warehouseForm.phone}
-              onChange={(event) => setWarehouseForm({ ...warehouseForm, phone: event.target.value })}
-            />
-            <Input
-              label="العنوان"
-              value={warehouseForm.address}
-              onChange={(event) => setWarehouseForm({ ...warehouseForm, address: event.target.value })}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium">ملاحظات</label>
-            <textarea
-              value={warehouseForm.notes}
-              onChange={(event) => setWarehouseForm({ ...warehouseForm, notes: event.target.value })}
-              rows={3}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-            />
-          </div>
-          <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={warehouseForm.is_default}
-                onChange={(event) => setWarehouseForm({ ...warehouseForm, is_default: event.target.checked })}
-              />
-              المخزن الافتراضي
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={warehouseForm.is_active}
-                onChange={(event) => setWarehouseForm({ ...warehouseForm, is_active: event.target.checked })}
-              />
-              مفعّل
-            </label>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setWarehouseModalOpen(false)}>إلغاء</Button>
+          <div className="flex justify-end pt-4">
+            <Button variant="secondary" onClick={() => { setShowModal(false); setEditingWarehouse(null) }}>إلغاء</Button>
             <Button type="submit" loading={saveWarehouseMutation.isPending}>حفظ</Button>
           </div>
         </form>
       </Modal>
 
-      <Modal isOpen={stockInOpen} onClose={() => setStockInOpen(false)} title="إدخال مخزون">
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!stockInForm.warehouse_id || !stockInForm.product_id || Number(stockInForm.quantity) <= 0) {
-              toast.error('اختر المخزن والمنتج وأدخل كمية أكبر من صفر')
-              return
-            }
-            stockInMutation.mutate()
-          }}
-        >
-          <div>
-            <label className="mb-1 block text-sm font-medium">المخزن</label>
-            <select
-              value={stockInForm.warehouse_id}
-              onChange={(event) => setStockInForm({ ...stockInForm, warehouse_id: event.target.value })}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-              required
-            >
-              <option value="">اختر المخزن</option>
-              {(warehouses || []).map((warehouse) => (
-                <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium">المنتج</label>
-            <select
-              value={stockInForm.product_id}
-              onChange={(event) => setStockInForm({ ...stockInForm, product_id: event.target.value })}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-              required
-            >
-              <option value="">اختر المنتج</option>
-              {(products || []).map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.name}{product.barcode ? ` - ${product.barcode}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Input
-              label="الكمية"
-              type="number"
-              min={0.001}
-              step="0.001"
-              value={stockInForm.quantity}
-              onChange={(event) => setStockInForm({ ...stockInForm, quantity: event.target.value })}
-              required
-            />
-            <Input
-              label="تكلفة الوحدة"
-              type="number"
-              min={0}
-              step="0.01"
-              value={stockInForm.cost_price}
-              onChange={(event) => setStockInForm({ ...stockInForm, cost_price: event.target.value })}
-            />
-            <Input
-              label="تاريخ الانتهاء"
-              type="date"
-              value={stockInForm.expiry_date}
-              onChange={(event) => setStockInForm({ ...stockInForm, expiry_date: event.target.value })}
-            />
-            <Input
-              label="رقم الدفعة"
-              value={stockInForm.batch_number}
-              onChange={(event) => setStockInForm({ ...stockInForm, batch_number: event.target.value })}
-            />
-          </div>
-          <Input
-            label="ملاحظات"
-            value={stockInForm.notes}
-            onChange={(event) => setStockInForm({ ...stockInForm, notes: event.target.value })}
-          />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setStockInOpen(false)}>إلغاء</Button>
-            <Button type="submit" loading={stockInMutation.isPending}>إدخال</Button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal isOpen={transferOpen} onClose={() => setTransferOpen(false)} title="تحويل بين المخازن">
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!transferForm.from_warehouse_id || !transferForm.to_warehouse_id || !transferForm.product_id || Number(transferForm.quantity) <= 0) {
-              toast.error('اختر المخازن والمنتج وأدخل كمية صحيحة')
-              return
-            }
-            transferMutation.mutate()
-          }}
-        >
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm font-medium">من مخزن</label>
-              <select
-                value={transferForm.from_warehouse_id}
-                onChange={(event) => setTransferForm({ ...transferForm, from_warehouse_id: event.target.value })}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-                required
-              >
-                <option value="">اختر المخزن</option>
-                {(warehouses || []).map((warehouse) => (
-                  <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium">إلى مخزن</label>
-              <select
-                value={transferForm.to_warehouse_id}
-                onChange={(event) => setTransferForm({ ...transferForm, to_warehouse_id: event.target.value })}
-                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-                required
-              >
-                <option value="">اختر المخزن</option>
-                {(warehouses || []).map((warehouse) => (
-                  <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium">المنتج</label>
-            <select
-              value={transferForm.product_id}
-              onChange={(event) => setTransferForm({ ...transferForm, product_id: event.target.value })}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-              required
-            >
-              <option value="">اختر المنتج</option>
-              {(products || []).map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.name}{product.barcode ? ` - ${product.barcode}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-          <Input
-            label="الكمية"
-            type="number"
-            min={0.001}
-            step="0.001"
-            value={transferForm.quantity}
-            onChange={(event) => setTransferForm({ ...transferForm, quantity: event.target.value })}
-            required
-          />
-          <Input
-            label="ملاحظات"
-            value={transferForm.notes}
-            onChange={(event) => setTransferForm({ ...transferForm, notes: event.target.value })}
-          />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setTransferOpen(false)}>إلغاء</Button>
-            <Button type="submit" loading={transferMutation.isPending}>تحويل</Button>
-          </div>
-        </form>
-      </Modal>
-
+      {/* Request from Warehouse Modal */}
       <Modal
-        isOpen={!!batchesProduct}
-        onClose={() => { setBatchesProduct(null); setAdjustForm({ batch_id: '', quantity: '', notes: '' }) }}
-        title={`الدفعات: ${batchesProduct?.name || ''}`}
-        size="lg"
-      >
-        <div className="space-y-4">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-xs text-gray-500 dark:border-gray-700">
-                  <th className="px-2 py-2 text-start">الدفعة</th>
-                  <th className="px-2 py-2 text-start">المخزن</th>
-                  <th className="px-2 py-2 text-start">الكمية</th>
-                  <th className="px-2 py-2 text-start">التكلفة</th>
-                  <th className="px-2 py-2 text-start">الانتهاء</th>
-                  <th className="px-2 py-2 text-start">تعديل</th>
-                </tr>
-              </thead>
-              <tbody>
-                {!batches?.length && (
-                  <tr><td colSpan={6} className="px-2 py-6 text-center text-gray-500">لا توجد دفعات متاحة</td></tr>
-                )}
-                {(batches || []).map((batch) => (
-                  <tr key={batch.id} className="border-b border-gray-100 dark:border-gray-800">
-                    <td className="px-2 py-2">{batch.batch_number || `#${batch.id}`}</td>
-                    <td className="px-2 py-2">{batch.warehouse?.name || '-'}</td>
-                    <td className="px-2 py-2 font-semibold">{batch.quantity}</td>
-                    <td className="px-2 py-2">{formatMoney(batch.cost_price, symbol)}</td>
-                    <td className="px-2 py-2">{batch.expiry_date ? formatDate(batch.expiry_date) : '-'}</td>
-                    <td className="px-2 py-2">
-                      <button
-                        type="button"
-                        onClick={() => setAdjustForm({
-                          batch_id: String(batch.id),
-                          quantity: String(batch.quantity),
-                          notes: '',
-                        })}
-                        className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/40"
-                        title="تسوية الكمية"
-                      >
-                        <Clock className="h-4 w-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {adjustForm.batch_id && (
-            <form
-              className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/20"
-              onSubmit={(event) => {
-                event.preventDefault()
-                adjustMutation.mutate()
-              }}
-            >
-              <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
-                تسوية كمية الدفعة #{adjustForm.batch_id}
-              </p>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Input
-                  label="الكمية الصحيحة"
-                  type="number"
-                  min={0}
-                  step="0.001"
-                  value={adjustForm.quantity}
-                  onChange={(event) => setAdjustForm({ ...adjustForm, quantity: event.target.value })}
-                  required
-                />
-                <Input
-                  label="سبب التسوية"
-                  value={adjustForm.notes}
-                  onChange={(event) => setAdjustForm({ ...adjustForm, notes: event.target.value })}
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="secondary" onClick={() => setAdjustForm({ batch_id: '', quantity: '', notes: '' })}>
-                  إلغاء
-                </Button>
-                <Button type="submit" loading={adjustMutation.isPending}>حفظ التسوية</Button>
-              </div>
-            </form>
-          )}
-        </div>
-      </Modal>
-
-      <Modal
-        isOpen={productModalOpen}
-        onClose={() => setProductModalOpen(false)}
-        title={editingProduct ? 'تعديل منتج' : 'إضافة منتج'}
+        isOpen={showRequestModal && requestingWarehouse !== null}
+        onClose={() => setShowRequestModal(false)}
+        title={`طلب منتجات من المخزن - ${requestingWarehouse?.name || ''}`}
         size="lg"
       >
         <form
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault()
-            saveProductMutation.mutate()
+            createRequestMutation.mutate(requestForm)
           }}
         >
-          <Input
-            label="اسم المنتج"
-            value={productForm.name}
-            onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-            required
-          />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Input
-              label="SKU"
-              value={productForm.sku}
-              onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })}
-            />
-            <Input
-              label="الباركود"
-              value={productForm.barcode}
-              onChange={(e) => setProductForm({ ...productForm, barcode: e.target.value })}
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Input
-              label="سعر البيع"
-              type="number"
-              min={0}
-              step="0.01"
-              value={productForm.sale_price}
-              onChange={(e) => setProductForm({ ...productForm, sale_price: e.target.value })}
-              required
-            />
-            <Input
-              label="تكلفة الوحدة"
-              type="number"
-              min={0}
-              step="0.01"
-              value={productForm.cost_price}
-              onChange={(e) => setProductForm({ ...productForm, cost_price: e.target.value })}
-              required
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Input
-              label="وحدة البيع"
-              value={productForm.sale_unit}
-              placeholder="مثال: قطعة، كرتون"
-              onChange={(e) => setProductForm({ ...productForm, sale_unit: e.target.value })}
-            />
-            <Input
-              label="وحدة الشراء"
-              value={productForm.purchase_unit}
-              placeholder="مثال: صندوق، كيس"
-              onChange={(e) => setProductForm({ ...productForm, purchase_unit: e.target.value })}
-            />
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Input
-              label="الحد الأدنى للمخزون"
-              type="number"
-              min={0}
-              value={productForm.min_stock}
-              onChange={(e) => setProductForm({ ...productForm, min_stock: e.target.value })}
-            />
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={productForm.is_available}
-                onChange={(e) => setProductForm({ ...productForm, is_available: e.target.checked })}
-                className="w-4 h-4"
-              />
-              متاح للبيع
-            </label>
+            <div className="col-span-2">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">المخزن المصدر</label>
+              <select
+                value={requestForm.from_warehouse_id}
+                onChange={(e) => setRequestForm({ ...requestForm, from_warehouse_id: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg"
+                required
+              >
+                <option value="">اختر مخزناً</option>
+                {(allWarehouses || []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">المنتج</label>
+              <select
+                value={requestForm.product_id}
+                onChange={(e) => setRequestForm({ ...requestForm, product_id: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg"
+                required
+              >
+                <option value="">اختر منتجاً</option>
+                {(products || []).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-span-1">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">الكمية</label>
+              <Input type="number" min={0.001} step="0.001" value={requestForm.quantity} onChange={(e) => setRequestForm({ ...requestForm, quantity: e.target.value })} />
+            </div>
+            <div className="col-span-1">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">ملاحظات</label>
+              <Input value={requestForm.notes} onChange={(e) => setRequestForm({ ...requestForm, notes: e.target.value })} />
+            </div>
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <Button type="button" variant="secondary" onClick={() => setProductModalOpen(false)}>إلغاء</Button>
-            <Button type="submit" loading={saveProductMutation.isPending}>حفظ</Button>
+            <Button variant="secondary" onClick={() => setShowRequestModal(false)}>إلغاء</Button>
+            <Button type="submit" loading={createRequestMutation.isPending}>إرسال الطلب</Button>
           </div>
         </form>
       </Modal>
 
+      {/* Warehouse Detail Modal */}
     </div>
   )
 }
 
-function SummaryCard({
-  icon,
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  icon: React.ReactNode
-  label: string
-  value: string
-  hint?: string
-  tone: 'blue' | 'emerald' | 'red' | 'amber'
-}) {
+function StatCard({ label, value, icon, tone }: { label: string; value: string | number; icon: React.ReactNode; tone: 'blue' | 'emerald' | 'amber' | 'red' }) {
   const tones: Record<string, string> = {
-    blue: 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300',
-    emerald: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300',
-    red: 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300',
-    amber: 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300',
+    blue: 'bg-blue-50 text-blue-700 dark:bg-blue-950/20 dark:text-blue-300',
+    emerald: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300',
+    amber: 'bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-300',
+    red: 'bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-300',
   }
+
   return (
-    <Card className="flex items-center gap-3">
-      <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`}>{icon}</span>
-      <div className="min-w-0">
-        <p className="text-xs text-gray-500 dark:text-gray-400">{label}</p>
-        <p className="truncate text-xl font-bold text-gray-900 dark:text-gray-100">{value}</p>
-        {hint && <p className="truncate text-[11px] text-gray-400">{hint}</p>}
+    <Card className="p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs text-gray-500 dark:text-gray-400">{label}</p>
+          <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{value}</p>
+        </div>
+        <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${tones[tone]}`}>
+          {icon}
+        </div>
       </div>
     </Card>
   )
 }
 
-function Stat({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
+function WarehouseCard({ warehouse, onEdit, onDelete, onRequest, onView, canEdit, canDelete, canRequest }: {
+  warehouse: WarehouseRecord
+  onEdit: () => void
+  onDelete: () => void
+  onRequest: () => void
+  onView: () => void
+  canEdit: boolean
+  canDelete: boolean
+  canRequest: boolean
+}) {
   return (
-    <div className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-gray-800/60">
-      <p className="text-[11px] text-gray-500 dark:text-gray-400">{label}</p>
-      <p className={`font-semibold ${danger ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>{value}</p>
-    </div>
-  )
-}
-
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-        active
-          ? 'border-primary text-primary'
-          : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
-
-function AlertsPanel({ alerts, symbol }: { alerts?: AlertsResponse; symbol: string }) {
-  if (!alerts) return null
-  const { expired, near_expiry, low_stock } = alerts
-  if (!expired.length && !near_expiry.length && !low_stock.length) {
-    return (
-      <Card>
-        <div className="flex items-center gap-3 py-2 text-emerald-700 dark:text-emerald-300">
-          <Package className="h-5 w-5" />
-          <p className="text-sm font-medium">لا توجد تنبيهات حالياً. المخزون وتواريخ الصلاحية بحالة جيدة.</p>
+    <div className="p-4 hover:shadow-md transition-shadow cursor-pointer group" onClick={onView}>
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-gray-900 dark:text-gray-100 truncate">{warehouse.name}</h3>
+          <Badge variant={warehouse.type === 'store' ? 'success' : warehouse.type === 'warehouse' ? 'info' : 'default'}>
+            {warehouse.type === 'store' ? 'متجر' : warehouse.type === 'warehouse' ? 'مخزن' : 'كلاهما'}
+          </Badge>
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          المنتجات: {warehouse.products_count ?? 0} · المخزون: {formatNumber(warehouse.total_quantity ?? 0)}
+        </p>
+        <div className="flex justify-end gap-2">
+          {canEdit && (
+            <button onClick={(e) => { e.stopPropagation(); onEdit() }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded" title="تعديل">
+              <PencilIcon className="w-4 h-4" />
+            </button>
+          )}
+          {canRequest && (
+            <button onClick={(e) => { e.stopPropagation(); onRequest() }} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded" title="طلب من المخزن">
+              <ArrowLeftRight className="w-4 h-4" />
+            </button>
+          )}
+          {canDelete && (
+            <button onClick={(e) => { e.stopPropagation(); onDelete() }} className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded" title="حذف">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </Card>
-    )
-  }
-
-  return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-      <AlertList
-        title="منتجات منتهية الصلاحية"
-        tone="red"
-        count={expired.length}
-        rows={expired.map((row) => ({
-          key: row.id,
-          title: row.product_name || '-',
-          subtitle: `${row.warehouse_name || '-'} · دفعة ${row.batch_number || row.id}`,
-          value: `${row.quantity} · خسارة ${formatMoney(row.loss, symbol)}`,
-          meta: row.expiry_date ? `انتهت في ${formatDate(row.expiry_date)} (${row.days_overdue} يوم)` : '',
-        }))}
-      />
-      <AlertList
-        title="قريبة من الانتهاء"
-        tone="amber"
-        count={near_expiry.length}
-        rows={near_expiry.map((row) => ({
-          key: row.id,
-          title: row.product_name || '-',
-          subtitle: `${row.warehouse_name || '-'} · دفعة ${row.batch_number || row.id}`,
-          value: `${row.quantity} · قيمة ${formatMoney(row.value, symbol)}`,
-          meta: row.expiry_date ? `تنتهي في ${formatDate(row.expiry_date)} (${row.days_left} يوم)` : '',
-        }))}
-      />
-      <AlertList
-        title="مخزون قارب على النفاد"
-        tone="blue"
-        count={low_stock.length}
-        rows={low_stock.map((row) => ({
-          key: row.id,
-          title: row.name,
-          subtitle: `الرصيد الحالي ${row.stock}`,
-          value: `حد التنبيه ${row.threshold}`,
-          meta: row.shortage > 0 ? `النقص ${row.shortage}` : '',
-        }))}
-      />
-    </div>
-  )
-}
-
-function AlertList({
-  title,
-  tone,
-  count,
-  rows,
-}: {
-  title: string
-  tone: 'red' | 'amber' | 'blue'
-  count: number
-  rows: Array<{ key: number; title: string; subtitle: string; value: string; meta: string }>
-}) {
-  const tones = {
-    red: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300',
-    blue: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300',
-  }
-  return (
-    <div className={`rounded-xl border p-4 ${tones[tone]}`}>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-bold dark:bg-gray-900/50">{count}</span>
-      </div>
-      <div className="max-h-64 space-y-2 overflow-y-auto">
-        {!rows.length && <p className="text-xs opacity-70">لا توجد عناصر</p>}
-        {rows.map((row) => (
-          <div key={row.key} className="rounded-lg bg-white/70 p-2 text-gray-700 dark:bg-gray-900/50 dark:text-gray-200">
-            <p className="truncate text-sm font-medium">{row.title}</p>
-            <p className="truncate text-[11px] opacity-80">{row.subtitle}</p>
-            <p className="mt-1 text-xs font-semibold">{row.value}</p>
-            {row.meta && <p className="text-[11px] opacity-70">{row.meta}</p>}
-          </div>
-        ))}
-      </div>
     </div>
   )
 }

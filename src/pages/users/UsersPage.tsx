@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '../../services/api'
-import { Plus, Trash2, UserRound, Pencil, Power, PowerOff } from 'lucide-react'
+import { Plus, Trash2, UserRound, Pencil, Power, PowerOff, Warehouse } from 'lucide-react'
 import Button from '../../components/common/buttons/Button'
 import Input from '../../components/common/inputs/Input'
 import Card from '../../components/common/cards/Card'
@@ -55,6 +55,16 @@ interface UserFormProps {
 export default function UsersPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [showWarehouseModal, setShowWarehouseModal] = useState(false)
+  const [warehouseUser, setWarehouseUser] = useState<User | null>(null)
+  const [warehousePermsDraft, setWarehousePermsDraft] = useState<Array<{
+    id: number
+    name: string
+    type: string | null
+    can_sell: boolean
+    can_request_stock: boolean
+    can_approve_stock: boolean
+  }>>([])
   const queryClient = useQueryClient()
 
   const { data: users, isLoading } = useQuery({
@@ -113,6 +123,55 @@ export default function UsersPage() {
     onError: (error) => {
       toast.error(getApiErrorMessage(error, 'تعذر تحديث الحالة'))
     },
+  })
+
+  const { data: userWarehouses } = useQuery({
+    queryKey: ['user-warehouses', warehouseUser?.id],
+    queryFn: async () => {
+      if (!warehouseUser?.id) return []
+      const res = await api.get(`/admin/users/${warehouseUser.id}/warehouses`)
+      return (res.data.warehouses || []) as Array<{
+        id: number
+        name: string
+        type: string | null
+        can_sell: boolean
+        can_request_stock: boolean
+        can_approve_stock: boolean
+      }>
+    },
+    enabled: !!warehouseUser?.id,
+  })
+
+  useEffect(() => {
+    if (warehouseUser?.id && userWarehouses) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setWarehousePermsDraft(userWarehouses.map((w) => ({
+        id: w.id,
+        name: w.name,
+        type: w.type,
+        can_sell: w.can_sell,
+        can_request_stock: w.can_request_stock,
+        can_approve_stock: w.can_approve_stock,
+      })))
+    }
+  }, [warehouseUser?.id, userWarehouses])
+
+  const updateUserWarehousesMutation = useMutation({
+    mutationFn: async () => {
+      if (!warehouseUser?.id) return
+      const payload = {
+        warehouses: warehousePermsDraft,
+      }
+      await api.post(`/admin/users/${warehouseUser.id}/warehouses`, payload)
+    },
+    onSuccess: () => {
+      toast.success('تم تحديث مخازن المستخدم')
+      setShowWarehouseModal(false)
+      setWarehouseUser(null)
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+      queryClient.invalidateQueries({ queryKey: ['auth-my-warehouses'] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تحديث مخازن المستخدم')),
   })
 
   const columns: Column<User>[] = [
@@ -209,6 +268,13 @@ export default function UsersPage() {
             <Pencil className="w-4 h-4" />
           </button>
           <button
+            onClick={() => { setWarehouseUser(u); setShowWarehouseModal(true) }}
+            className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded dark:text-blue-400"
+            title="تعديل مخازن المستخدم"
+          >
+            <Warehouse className="w-4 h-4" />
+          </button>
+          <button
             onClick={() => {
               if (window.confirm(`هل تريد حذف المستخدم ${u.name}؟`)) {
                 deleteMutation.mutate(u.id)
@@ -276,6 +342,20 @@ export default function UsersPage() {
             }}
           />
         )}
+      </Modal>
+      <Modal isOpen={showWarehouseModal && !!warehouseUser} onClose={() => setShowWarehouseModal(false)} title="تعديل مخازن المستخدم">
+        <UserWarehousesModal
+          user={warehouseUser}
+          warehouses={warehousePermsDraft.length > 0 ? warehousePermsDraft : (userWarehouses || [])}
+          onClose={() => {
+            setShowWarehouseModal(false)
+            setWarehousePermsDraft([])
+          }}
+          onSave={(warehouses) => {
+            setWarehousePermsDraft(warehouses)
+            updateUserWarehousesMutation.mutate()
+          }}
+        />
       </Modal>
     </div>
   )
@@ -688,5 +768,87 @@ function KitchenStationField({ stations, value, onChange }: {
         ))}
       </select>
     </div>
+  )
+}
+
+function UserWarehousesModal({ user, warehouses, onClose, onSave }: {
+  user: User | null
+  warehouses: Array<{
+    id: number
+    name: string
+    type: string | null
+    can_sell: boolean
+    can_request_stock: boolean
+    can_approve_stock: boolean
+  }>
+  onClose: () => void
+  onSave: (warehouses: Array<{
+    id: number
+    name: string
+    type: string | null
+    can_sell: boolean
+    can_request_stock: boolean
+    can_approve_stock: boolean
+  }>) => void
+}) {
+  const [localWarehouses, setLocalWarehouses] = useState(warehouses)
+
+  return (
+    <Modal isOpen={!!user} onClose={onClose} title={`مخازن المستخدم - ${user?.name}`} size="lg">
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          حدد المخازن التي يمكن للمستخدم العمل عليها وصلاحياته في كل مخزن:
+        </p>
+        <div className="space-y-2 max-h-[400px] overflow-y-auto">
+          {localWarehouses.map((w) => (
+            <div key={w.id} className="flex items-center justify-between gap-3 p-3 border rounded-lg bg-gray-50 dark:bg-gray-800/50">
+              <div className="flex-1">
+                <p className="font-medium text-gray-900 dark:text-gray-100">{w.name}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {w.type === 'store' ? 'متجر' : w.type === 'pos' ? 'نقطة بيع' : 'كلاهما'}
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={w.can_sell}
+                    onChange={() => setLocalWarehouses(localWarehouses.map(x => x.id === w.id ? { ...x, can_sell: !x.can_sell } : x))}
+                    className="rounded border-gray-300 dark:border-gray-700"
+                  />
+                  <label className="text-xs text-gray-700 dark:text-gray-300">بيع</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={w.can_request_stock}
+                    onChange={() => setLocalWarehouses(localWarehouses.map(x => x.id === w.id ? { ...x, can_request_stock: !x.can_request_stock } : x))}
+                    className="rounded border-gray-300 dark:border-gray-700"
+                  />
+                  <label className="text-xs text-gray-700 dark:text-gray-300">طلب مخزون</label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={w.can_approve_stock}
+                    onChange={() => setLocalWarehouses(localWarehouses.map(x => x.id === w.id ? { ...x, can_approve_stock: !x.can_approve_stock } : x))}
+                    className="rounded border-gray-300 dark:border-gray-700"
+                  />
+                  <label className="text-xs text-gray-700 dark:text-gray-300">قبول طلبات</label>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="secondary" onClick={onClose}>
+            إغلاق
+          </Button>
+          <Button onClick={() => onSave(localWarehouses)}>
+            حفظ
+          </Button>
+        </div>
+      </div>
+    </Modal>
   )
 }

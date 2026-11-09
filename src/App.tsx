@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
 import { useAuthStore } from './store/authStore'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import api from './services/api'
 import { useSettingsStore } from './store/settingsStore'
@@ -10,8 +10,10 @@ import MainLayout from './layouts/MainLayout'
 import LoginPage from './pages/auth/LoginPage'
 import DashboardPage from './pages/dashboard/DashboardPage'
 import POSPage from './pages/pos/POSPage'
+import StoresPage from './pages/stores/StoresPage'
 import OrdersPage from './pages/orders/OrdersPage'
 import WarehousesPage from './pages/warehouses/WarehousesPage'
+import WarehouseDetailPage from './pages/warehouses/WarehouseDetailPage'
 import InventoryPage from './pages/inventory/InventoryPage'
 import CustomersPage from './pages/customers/CustomersPage'
 import EmployeesPage from './pages/employees/EmployeesPage'
@@ -38,11 +40,26 @@ import NotificationsPage from './pages/notifications/NotificationsPage'
 import CategoriesPage from './pages/categories/CategoriesPage'
 import RolesPage from './pages/roles/RolesPage'
 import AutoTranslate from './i18n/AutoTranslate'
+import SplashScreen from './components/common/splash/SplashScreen'
 
 const queryClient = new QueryClient()
 
 function App() {
-  const { isAuthenticated } = useAuthStore()
+  const authStore = useAuthStore()
+  const { isAuthenticated } = authStore
+  const [splashFinished, setSplashFinished] = useState(isAuthenticated)
+
+  // Show splash only when NOT authenticated (login page / refresh / after logout)
+  // Splash plays automatically; when it ends, navigate to login page
+  useEffect(() => {
+    if (isAuthenticated) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSplashFinished(true)
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSplashFinished(false)
+    }
+  }, [isAuthenticated])
   const setUser = useAuthStore((state) => state.setUser)
   const logout = useAuthStore((state) => state.logout)
   const loadSettings = useSettingsStore((state) => state.load)
@@ -73,11 +90,14 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
+      {!splashFinished ? (
+        <SplashScreen onFinish={() => setSplashFinished(true)} />
+      ) : (
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
 
-          <Route path="/" element={
+            <Route path="/" element={
             isAuthenticated ? (
               <MainLayout>
                 <DashboardPage />
@@ -118,6 +138,24 @@ function App() {
             isAuthenticated ? (
               <MainLayout>
                 <WarehousesPage />
+              </MainLayout>
+            ) : (
+              <Navigate to="/login" />
+            )
+          } />
+          <Route path="/warehouses/:id" element={
+            isAuthenticated ? (
+              <MainLayout>
+                <WarehouseDetailPage />
+              </MainLayout>
+            ) : (
+              <Navigate to="/login" />
+            )
+          } />
+          <Route path="/stores" element={
+            isAuthenticated ? (
+              <MainLayout>
+                <StoresPage />
               </MainLayout>
             ) : (
               <Navigate to="/login" />
@@ -247,7 +285,7 @@ function App() {
         </Routes>
         <Toaster position="top-center" richColors />
         <AutoTranslate />
-      </BrowserRouter>
+      </BrowserRouter>)}
     </QueryClientProvider>
   )
 }

@@ -16,6 +16,7 @@ import {
   Book,
   List,
   TrendingUp,
+  ArrowLeftRight,
 } from 'lucide-react'
 import { useLangStore } from '../store/langStore'
 import { useSettingsStore, mediaUrl } from '../store/settingsStore'
@@ -78,13 +79,22 @@ export default function Sidebar({ open, mobileOpen, onClose }: SidebarProps) {
     },
     { icon: ShoppingCart, label: t('pos', lang), path: '/pos', anyPermissions: ['create_orders', 'view_pos'] },
     {
+      icon: ShoppingCart,
+      label: 'المتاجر',
+      path: '/stores',
+      anyPermissions: ['view_stores', 'create_stores', 'edit_stores', 'delete_stores', 'request_stock_for_store'],
+      children: [
+        { label: 'إدارة المتاجر', path: '/stores', icon: ShoppingCart, permissions: ['view_stores', 'create_stores', 'edit_stores', 'delete_stores'] },
+        { label: 'طلب منتجات من المخزن', path: '/stores', icon: ArrowLeftRight, permissions: ['request_stock_for_store'] },
+      ],
+    },
+    {
       icon: Warehouse,
-      label: 'المخزون',
+      label: 'المخازن',
       path: '/warehouses',
       anyPermissions: ['view_warehouses', 'view_inventory', 'view_products', 'manage_stock'],
       children: [
-        { label: 'المخازن والمنتجات', path: '/warehouses', icon: Warehouse, permissions: ['view_warehouses'] },
-        { label: 'المنتجات', path: '/inventory', icon: Package, permissions: ['view_inventory'] },
+        { label: 'المخازن والمستودعات', path: '/warehouses', icon: Warehouse, permissions: ['view_warehouses'] },
         { label: 'حركات المخزون', path: '/stock-movements', icon: Activity, permissions: ['view_inventory'] },
         { label: 'المشتريات', path: '/purchases', icon: Truck, permissions: ['view_purchases'] },
         { label: 'الموردون', path: '/suppliers', icon: Truck, permissions: ['view_suppliers'] },

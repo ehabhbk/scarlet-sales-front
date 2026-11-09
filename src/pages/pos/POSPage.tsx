@@ -27,6 +27,7 @@ import {
   Lock,
   Unlock,
   ChevronDown,
+  AlertCircle,
 } from 'lucide-react'
 import Button from '../../components/common/buttons/Button'
 import Modal from '../../components/common/modals/Modal'
@@ -51,6 +52,9 @@ interface CartItem {
   modifiers: CartModifier[]
   stock?: number
   track_inventory?: boolean
+  unit?: string
+  conversion_factor?: number
+  is_sub_unit?: boolean
 }
 
 interface ProductSize {
@@ -91,6 +95,9 @@ interface POSProduct {
   warehouse_id?: number
   sizes?: ProductSize[]
   modifiers?: ProductModifier[]
+  sub_unit?: string | null
+  sale_unit?: string | null
+  conversion_factor?: number
 }
 
 interface WarehouseOption {
@@ -100,6 +107,9 @@ interface WarehouseOption {
   type?: string | null
   allow_sales?: boolean
   pos_sale_source?: string | null
+  can_sell?: boolean
+  can_request_stock?: boolean
+  can_approve_stock?: boolean
   is_default: boolean
   is_active: boolean
 }
@@ -277,6 +287,7 @@ export default function POSPage() {
   const queryClient = useQueryClient()
 
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null)
+  const [unitSelection, setUnitSelection] = useState<Record<number, 'main' | 'sub'>>({})
   const [cart, setCart] = useState<CartItem[]>([])
   const [paymentMethod, setPaymentMethod] = useState('')
   const [splitPayment, setSplitPayment] = useState(false)
@@ -319,7 +330,6 @@ export default function POSPage() {
     restaurant: restaurantData,
     paymentMethods,
     settingsError,
-    posSaleSource,
   } = useSettingsStore()
   const loadSettings = useSettingsStore((s) => s.load)
 
@@ -810,11 +820,22 @@ export default function POSPage() {
     },
   })
 
+  const { data: myWarehouses } = useQuery({
+    queryKey: ['auth-my-warehouses'],
+    queryFn: async () => {
+      const res = await api.get('/auth/my-warehouses')
+      return (res.data.warehouses || []) as WarehouseOption[]
+    },
+  })
+
+  const sellableWarehouses = (myWarehouses || []).filter(
+    (w) => w.can_sell && w.is_active && w.allow_sales
+  )
+
   const selectedWarehouseId =
     manualWarehouseId ??
-    (warehouses?.find((warehouse) => warehouse.is_default && warehouse.is_active)?.id ??
-      warehouses?.find((warehouse) => warehouse.is_active)?.id ??
-      warehouses?.[0]?.id ??
+    (sellableWarehouses?.find((warehouse) => warehouse.is_default)?.id ??
+      sellableWarehouses?.[0]?.id ??
       null)
 
   const { data: products } = useQuery({
@@ -826,6 +847,39 @@ export default function POSPage() {
       return (res.data.products || res.data.data || []) as POSProduct[]
     },
     enabled: Boolean(selectedWarehouseId),
+  })
+
+  const { data: stockRequestsToReceive } = useQuery({
+    queryKey: ['pos-stock-requests-to-receive'],
+    queryFn: async () => {
+      const res = await api.get('/stock-requests?status=approved')
+      return (res.data.data || []) as Array<{
+        id: number
+        from_warehouse_id: number
+        to_warehouse_id: number
+        product_id: number
+        requested_quantity: number
+        approved_quantity: number | null
+        status: string
+        notes?: string | null
+        fromWarehouse?: { id: number; name: string }
+        toWarehouse?: { id: number; name: string }
+        product?: { id: number; name: string; barcode?: string | null }
+        requester?: { id: number; name: string }
+        approver?: { id: number; name: string }
+      }>
+    },
+    enabled: Boolean(selectedWarehouseId),
+  })
+
+  const receiveStockRequestMutation = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/receive`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pos-stock-requests-to-receive'] })
+      queryClient.invalidateQueries({ queryKey: ['pos-products-available', selectedWarehouseId] })
+      toast.success('تم استلام الكمية وترحيلها إلى نقطة البيع')
+    },
+    onError: (error) => toast.error(getErrorMessage(error, 'تعذر استلام الكمية')),
   })
 
   const filteredProducts = products?.filter((product: POSProduct) => {
@@ -895,28 +949,37 @@ export default function POSPage() {
     },
   })
 
-  const computePrice = (product: POSProduct, sizeId: number | null, modifierOptionIds: number[]) => {
-    let price = Number(product.sale_price) || 0
-    const size = product.sizes?.find((s) => s.id === sizeId)
-    if (size) price += Number(size.price_modifier) || 0
-    for (const mod of product.modifiers || []) {
-      for (const opt of mod.options || []) {
-        if (modifierOptionIds.includes(opt.id)) price += Number(opt.price_modifier) || 0
-      }
-    }
-    return price
-  }
-
-  const addToCart = (product: POSProduct, sizeId: number | null = null, modifierOptionIds: number[] = []) => {
+  const addToCart = (
+    product: POSProduct,
+    sizeId: number | null = null,
+    modifierOptionIds: number[] = [],
+    unit: 'main' | 'sub' = 'main'
+  ) => {
     if (product.is_available === false) {
       toast.error('هذا المنتج غير متاح للبيع')
       return
     }
-    const stock = Number(product.stock ?? 0)
+
+    const conversionFactor = Number(product.conversion_factor ?? 1)
+    const isSubUnit = unit === 'sub' && Boolean(product.sub_unit) && conversionFactor > 1
+
+    // Effective price per selected unit
+    let unitPrice = Number(product.sale_price) || 0
+    if (isSubUnit) {
+      unitPrice = conversionFactor > 0 ? unitPrice / conversionFactor : unitPrice
+    }
+
+    // Effective stock in selected unit
+    let effectiveStock = Number(product.stock ?? 0)
+    if (isSubUnit) {
+      effectiveStock = effectiveStock * conversionFactor
+    }
+
     if (product.track_inventory && product.in_stock === false) {
       toast.error('لا يوجد رصيد كافٍ من هذا المنتج في المخزن المحدد')
       return
     }
+
     const size = product.sizes?.find((s) => s.id === sizeId)
     const modifiers: CartModifier[] = []
     for (const mod of product.modifiers || []) {
@@ -931,24 +994,38 @@ export default function POSPage() {
         }
       }
     }
-    const price = computePrice(product, sizeId, modifierOptionIds)
+
+    // Apply size/modifier price on top of unit price
+    let price = unitPrice
+    if (size) price += Number(size.price_modifier) || 0
+    for (const mod of product.modifiers || []) {
+      for (const opt of mod.options || []) {
+        if (modifierOptionIds.includes(opt.id)) price += Number(opt.price_modifier) || 0
+      }
+    }
+
     const nameSuffix = size ? ` (${size.name})` : ''
+    const unitLabel = isSubUnit ? ` (${product.sub_unit})` : ''
     const cartItem: CartItem = {
       product_id: product.id,
-      name: product.name + nameSuffix,
+      name: product.name + nameSuffix + unitLabel,
       image: product.image,
       price,
       quantity: 1,
       size_id: sizeId || undefined,
       size_name: size?.name,
       modifiers,
-      stock,
+      stock: effectiveStock,
       track_inventory: product.track_inventory,
+      unit: isSubUnit ? product.sub_unit ?? undefined : undefined,
+      conversion_factor: isSubUnit ? conversionFactor : undefined,
+      is_sub_unit: isSubUnit,
     }
     const existing = cart.find(
       (item) =>
         item.product_id === product.id &&
         item.size_id === cartItem.size_id &&
+        item.is_sub_unit === cartItem.is_sub_unit &&
         JSON.stringify(item.modifiers.map((m) => m.modifier_option_id).sort()) ===
           JSON.stringify(modifiers.map((m) => m.modifier_option_id).sort())
     )
@@ -1016,7 +1093,10 @@ export default function POSPage() {
       toast.error('لا يمكنك إنشاء الطلب. قم بفتح الوردية أولاً.')
       return
     }
-    const alreadyInCart = cart.some((item) => item.product_id === product.id)
+    const selectedUnit = unitSelection[product.id] || 'main'
+    const alreadyInCart = cart.some(
+      (item) => item.product_id === product.id && item.is_sub_unit === (selectedUnit === 'sub')
+    )
     if (alreadyInCart && !(product.sizes && product.sizes.length > 0) && !(product.modifiers && product.modifiers.length > 0)) {
       toast.info('لقد قمت باختيار هذا المنتج')
       return
@@ -1034,7 +1114,7 @@ export default function POSPage() {
       }
       setSelectedModifierOptionIds(defaultOpts)
     } else {
-      addToCart(product)
+      addToCart(product, null, [], selectedUnit)
     }
   }
 
@@ -1265,6 +1345,31 @@ export default function POSPage() {
               </div>
             )}
           </div>
+
+          {stockRequestsToReceive?.length && (
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <span className="text-xs font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-1 rounded-full">
+                <AlertCircle className="w-3 h-3 mr-1" />
+                طلبات مؤقتة للاستلام
+              </span>
+              {stockRequestsToReceive.slice(0, 3).map((req) => (
+                <button
+                  key={req.id}
+                  onClick={() => receiveStockRequestMutation.mutate(req.id)}
+                  disabled={receiveStockRequestMutation.isPending}
+                  className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg text-xs text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-950/50 transition disabled:opacity-50"
+                >
+                  استلام: {req.product?.name || 'منتج'} ({req.approved_quantity ?? req.requested_quantity})
+                </button>
+              ))}
+              {stockRequestsToReceive.length > 3 && (
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  و {stockRequestsToReceive.length - 3} طلبات إضافية
+                </span>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-2">
             {can('view_pos') && can('view_all_shifts') && openShift && (
               <Button
@@ -1317,21 +1422,11 @@ export default function POSPage() {
                 }}
                 className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
               >
-                {(warehouses || [])
-                  .filter((warehouse) => {
-                    if (!warehouse.is_active || !warehouse.allow_sales) return false
-                    const src = (warehouse.pos_sale_source || posSaleSource || 'both') as string
-                    const isStoreType = warehouse.type === 'pos' || warehouse.type === 'both'
-                    const isWhType = warehouse.type === 'store' || warehouse.type === 'both'
-                    if (src === 'store') return isStoreType
-                    if (src === 'warehouse') return isWhType
-                    return true
-                  })
-                  .map((warehouse) => (
-                    <option key={warehouse.id} value={warehouse.id}>
-                      {warehouse.name}
-                    </option>
-                  ))}
+                {(sellableWarehouses || []).map((warehouse) => (
+                  <option key={warehouse.id} value={warehouse.id}>
+                    {warehouse.name}
+                  </option>
+                ))}
               </select>
             </div>
             {((openShift && canCloseShift) || (!openShift && can('open_shift'))) && (
@@ -1454,6 +1549,14 @@ export default function POSPage() {
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 xl:grid-cols-4">
                 {filteredProducts.map((product) => {
                   const outOfStock = Boolean(product.track_inventory && product.in_stock === false)
+                  const hasSubUnit = Boolean(product.sub_unit) && Number(product.conversion_factor ?? 1) > 1
+                  const selectedUnit = unitSelection[product.id] || 'main'
+                  const displayPrice = hasSubUnit && selectedUnit === 'sub'
+                    ? Number(product.sale_price) / Number(product.conversion_factor || 1)
+                    : Number(product.sale_price)
+                  const displayStock = hasSubUnit && selectedUnit === 'sub'
+                    ? Number(product.stock ?? 0) * Number(product.conversion_factor || 1)
+                    : Number(product.stock ?? 0)
                   return (
                   <button
                     key={product.id}
@@ -1469,8 +1572,23 @@ export default function POSPage() {
                             : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300'
                         }`}
                       >
-                        {outOfStock ? 'نفد المخزون' : `المخزون: ${formatNumber(Number(product.stock ?? 0))}`}
+                        {outOfStock ? 'نفد المخزون' : `المخزون: ${formatNumber(displayStock)}`}
                       </span>
+                    )}
+                    {hasSubUnit && (
+                      <div className="flex items-center gap-1 mb-2">
+                        <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400">الوحدة:</label>
+                        <select
+                          value={selectedUnit}
+                          onChange={(e) => {
+                            setUnitSelection({ ...unitSelection, [product.id]: e.target.value as 'main' | 'sub' })
+                          }}
+                          className="text-xs border border-gray-300 dark:border-gray-700 rounded px-2 py-0.5 bg-white dark:bg-gray-900"
+                        >
+                          <option value="main">{product.sale_unit || 'الرئيسية'}</option>
+                          <option value="sub">{product.sub_unit || 'فرعية'}</option>
+                        </select>
+                      </div>
                     )}
                     <div className="aspect-square bg-gray-100 dark:bg-gray-800 rounded-lg mb-3 flex items-center justify-center overflow-hidden">
                       {product.image ? (
@@ -1487,7 +1605,10 @@ export default function POSPage() {
                       {product.name}
                     </h3>
                     <p className="text-lg font-bold text-primary dark:text-blue-400 mt-1">
-                      {formatMoney(product.sale_price, currencySymbol)}
+                      {formatMoney(displayPrice, currencySymbol)}
+                      {hasSubUnit && selectedUnit === 'sub' && (
+                        <span className="text-xs text-gray-500 ml-1">/{product.sub_unit}</span>
+                      )}
                     </p>
                     {product.nearest_expiry && (
                       <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">

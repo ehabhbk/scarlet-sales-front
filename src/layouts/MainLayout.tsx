@@ -26,6 +26,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
     '/products': { all: ['view_products'] },
     '/categories': { all: ['view_categories'] },
     '/warehouses': { any: ['view_warehouses', 'view_inventory', 'view_products', 'manage_stock'] },
+    '/stores': { any: ['view_stores', 'create_stores', 'edit_stores', 'delete_stores', 'request_stock_for_store'] },
     '/employees': { all: ['view_employees'] },
     '/attendance': { all: ['view_employees'] },
     '/inventory': { all: ['view_inventory'] },
