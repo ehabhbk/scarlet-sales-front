@@ -29,6 +29,10 @@ interface PurchaseRecord {
 interface PurchaseLineItem {
   product_id: number | string
   warehouse_id: number | string
+  main_quantity: number | string
+  sub_quantity_per_main: number | string
+  unit_name: string
+  sub_unit_name: string
   quantity: number | string
   unit_cost: number | string
   expiry_date: string
@@ -37,7 +41,7 @@ interface PurchaseLineItem {
 
 interface PurchaseFormProps {
   suppliers: { id: number; name: string }[]
-  products: { id: number; name: string; cost_price: number }[]
+  products: { id: number; name: string; cost_price: number; main_unit?: string | null; sub_unit?: string | null; conversion_factor?: number | null }[]
   warehouses: { id: number; name: string }[]
   accounts: { id: number; code: string; name: string; type: string; is_active: boolean }[]
   paymentMethods: { value: string; label: string }[]
@@ -205,8 +209,8 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
     payment_method: paymentMethods[0]?.value || '',
     notes: '',
   })
-  const [lineItems, setLineItems] = useState<PurchaseLineItem[]>([{ product_id: '', warehouse_id: '', quantity: 1, unit_cost: 0, expiry_date: '', batch_number: '' }])
-  const subtotal = lineItems.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0)
+  const [lineItems, setLineItems] = useState<PurchaseLineItem[]>([{ product_id: '', warehouse_id: '', main_quantity: 1, sub_quantity_per_main: 0, unit_name: '', sub_unit_name: '', quantity: 1, unit_cost: 0, expiry_date: '', batch_number: '' }])
+  const subtotal = lineItems.reduce((sum, item) => sum + Number(item.main_quantity || 0) * Number(item.unit_cost || 0), 0)
   const totalAmount = subtotal + Number(formData.tax_amount || 0)
 
   const mutation = useMutation({
@@ -229,7 +233,11 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
       items: lineItems.map(li => ({
         product_id: Number(li.product_id) || null,
         warehouse_id: Number(li.warehouse_id) || null,
-        quantity: Number(li.quantity),
+        main_quantity: Number(li.main_quantity),
+        sub_quantity_per_main: Number(li.sub_quantity_per_main) || 0,
+        unit_name: li.unit_name || null,
+        sub_unit_name: li.sub_unit_name || null,
+        quantity: Number(li.main_quantity),
         unit_cost: Number(li.unit_cost),
         expiry_date: li.expiry_date || null,
         batch_number: li.batch_number || null,
@@ -238,7 +246,7 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
     mutation.mutate(payload)
   }
 
-  const addLine = () => setLineItems([...lineItems, { product_id: '', warehouse_id: '', quantity: 1, unit_cost: 0, expiry_date: '', batch_number: '' }])
+  const addLine = () => setLineItems([...lineItems, { product_id: '', warehouse_id: '', main_quantity: 1, sub_quantity_per_main: 0, unit_name: '', sub_unit_name: '', quantity: 1, unit_cost: 0, expiry_date: '', batch_number: '' }])
   const removeLine = (idx: number) => setLineItems(lineItems.filter((_, i) => i !== idx))
   const updateLine = (idx: number, field: keyof PurchaseLineItem, value: string | number) => {
     const next = [...lineItems]
@@ -296,43 +304,67 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
           <Button type="button" size="sm" variant="secondary" onClick={addLine}>+ إضافة منتج</Button>
         </div>
         <div className="space-y-2">
-          {lineItems.map((li, idx) => (
-            <div key={idx} className="grid grid-cols-2 items-end gap-2 sm:grid-cols-6">
-              <div className="col-span-2">
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المنتج</label>
-                <select value={li.product_id} onChange={(e) => updateLine(idx, 'product_id', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
-                  <option value="">اختر منتجاً</option>
-                  {products.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-                </select>
+          {lineItems.map((li, idx) => {
+            return (
+              <div key={idx} className="grid grid-cols-2 items-end gap-2 sm:grid-cols-8">
+                <div className="col-span-3">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المنتج</label>
+                  <select value={li.product_id} onChange={(e) => {
+                    updateLine(idx, 'product_id', e.target.value)
+                    const p = products.find((prod) => String(prod.id) === e.target.value)
+                    if (p) {
+                      updateLine(idx, 'unit_name', p.main_unit || '')
+                      updateLine(idx, 'sub_unit_name', p.sub_unit || '')
+                    }
+                  }} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
+                    <option value="">اختر منتجاً</option>
+                    {products.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المخزن</label>
+                  <select value={li.warehouse_id} onChange={(e) => updateLine(idx, 'warehouse_id', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
+                    <option value="">اختر مخزناً</option>
+                    {warehouses.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الكمية الأساسية</label>
+                  <Input type="number" min={0.001} step="0.001" value={li.main_quantity} onChange={(e) => {
+                    updateLine(idx, 'main_quantity', e.target.value)
+                    updateLine(idx, 'quantity', e.target.value)
+                  }} required />
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الفرعية في كل وحدة</label>
+                  <Input type="number" min={0} step="0.001" value={li.sub_quantity_per_main} onChange={(e) => updateLine(idx, 'sub_quantity_per_main', e.target.value)} />
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">وحدة أساسية</label>
+                  <Input value={li.unit_name} onChange={(e) => updateLine(idx, 'unit_name', e.target.value)} />
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">وحدة فرعية</label>
+                  <Input value={li.sub_unit_name} onChange={(e) => updateLine(idx, 'sub_unit_name', e.target.value)} />
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تكلفة الوحدة</label>
+                  <Input type="number" min={0} step="0.01" value={li.unit_cost} onChange={(e) => updateLine(idx, 'unit_cost', e.target.value)} />
+                </div>
+                <div className="col-span-1">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تاريخ الصلاحية</label>
+                  <Input type="date" value={li.expiry_date} onChange={(e) => updateLine(idx, 'expiry_date', e.target.value)} />
+                </div>
+                <div className="col-span-1 flex items-end">
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">رقم الدفعة</label>
+                  <Input value={li.batch_number} onChange={(e) => updateLine(idx, 'batch_number', e.target.value)} />
+                </div>
+                {lineItems.length > 1 && (
+                  <button type="button" onClick={() => removeLine(idx)} className="p-2 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded">×</button>
+                )}
               </div>
-              <div className="col-span-2">
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المخزن</label>
-                <select value={li.warehouse_id} onChange={(e) => updateLine(idx, 'warehouse_id', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
-                  <option value="">اختر مخزناً</option>
-                  {warehouses.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-                </select>
-              </div>
-              <div className="col-span-1">
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الكمية</label>
-                <Input type="number" min={0.001} step="0.001" value={li.quantity} onChange={(e) => updateLine(idx, 'quantity', e.target.value)} />
-              </div>
-              <div className="col-span-1">
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تكلفة الوحدة</label>
-                <Input type="number" min={0} step="0.01" value={li.unit_cost} onChange={(e) => updateLine(idx, 'unit_cost', e.target.value)} />
-              </div>
-              <div className="col-span-1">
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تاريخ الصلاحية</label>
-                <Input type="date" value={li.expiry_date} onChange={(e) => updateLine(idx, 'expiry_date', e.target.value)} />
-              </div>
-              <div className="col-span-1 flex items-end">
-                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">رقم الدفعة</label>
-                <Input value={li.batch_number} onChange={(e) => updateLine(idx, 'batch_number', e.target.value)} />
-              </div>
-              {lineItems.length > 1 && (
-                <button type="button" onClick={() => removeLine(idx)} className="p-2 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded">×</button>
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 

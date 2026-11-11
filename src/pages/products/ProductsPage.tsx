@@ -29,6 +29,10 @@ interface ProductRecord {
   min_stock?: number
   sale_unit?: string | null
   purchase_unit?: string | null
+  main_unit?: string | null
+  sub_unit?: string | null
+  conversion_rate?: number | null
+  sub_unit_price?: number | null
   expiry_alert_days?: number
   low_stock_threshold?: number
   low_stock?: boolean
@@ -153,19 +157,30 @@ export default function ProductsPage() {
       header: 'الرصيد',
       render: (item: ProductRecord) => {
         const stock = item.total_stock ?? item.current_stock ?? 0
+        const min = Number(item.min_stock ?? item.low_stock_threshold ?? 0)
+        const isOut = stock <= 0
+        const isLow = stock > 0 && stock <= min
         return (
           <div className="flex flex-col gap-1">
             <span className={`w-fit rounded px-2 py-1 text-xs ${
-              item.low_stock
+              isOut
                 ? 'bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300'
-                : 'bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300'
+                : isLow
+                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+                  : 'bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300'
             }`}>
               {stock}
             </span>
-            {item.low_stock && (
+            {isOut && (
               <span className="inline-flex items-center gap-1 text-[10px] text-red-600 dark:text-red-400">
                 <AlertTriangle className="h-3 w-3" />
-                حد التنبيه {item.min_stock ?? 0}
+                منتهي المخزون
+              </span>
+            )}
+            {isLow && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-3 w-3" />
+                قريب النفاذ (الحد الأدنى {min})
               </span>
             )}
           </div>
@@ -282,6 +297,10 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
     min_stock: number | string
     sale_unit: string
     purchase_unit: string
+    main_unit: string
+    sub_unit: string
+    conversion_rate: number | string
+    sub_unit_price: number | string
     expiry_alert_days: number | string
     low_stock_threshold: number | string
     track_inventory: boolean
@@ -299,6 +318,10 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
     min_stock: product?.min_stock ?? 5,
     sale_unit: product?.sale_unit || '',
     purchase_unit: product?.purchase_unit || '',
+    main_unit: product?.main_unit || '',
+    sub_unit: product?.sub_unit || '',
+    conversion_rate: product?.conversion_rate ?? '',
+    sub_unit_price: product?.sub_unit_price ?? '',
     expiry_alert_days: product?.expiry_alert_days ?? 30,
     low_stock_threshold: product?.low_stock_threshold ?? 5,
     track_inventory: product?.track_inventory ?? true,
@@ -328,6 +351,10 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
       data.append('min_stock', String(formData.min_stock))
       data.append('sale_unit', formData.sale_unit.trim())
       data.append('purchase_unit', formData.purchase_unit.trim())
+      data.append('main_unit', formData.main_unit.trim())
+      data.append('sub_unit', formData.sub_unit.trim())
+      if (String(formData.conversion_rate).trim()) data.append('conversion_rate', String(formData.conversion_rate))
+      if (String(formData.sub_unit_price).trim()) data.append('sub_unit_price', String(formData.sub_unit_price))
       data.append('expiry_alert_days', String(formData.expiry_alert_days))
       data.append('low_stock_threshold', String(formData.low_stock_threshold))
       data.append('track_inventory', formData.track_inventory ? '1' : '0')
@@ -425,14 +452,48 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
           onChange={(e) => setFormData({ ...formData, sale_unit: e.target.value })}
           placeholder="مثال: قطعة، كرتون"
         />
-      </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Input
           label="وحدة الشراء"
           value={formData.purchase_unit}
           onChange={(e) => setFormData({ ...formData, purchase_unit: e.target.value })}
           placeholder="مثال: صندوق، كيس"
         />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Input
+          label="الوحدة الرئيسية (مثال: كرتونة)"
+          value={formData.main_unit}
+          onChange={(e) => setFormData({ ...formData, main_unit: e.target.value })}
+          placeholder="اترك فارغاً لوحدة واحدة فقط"
+        />
+        <Input
+          label="الوحدة الفرعية (مثال: شريط)"
+          value={formData.sub_unit}
+          onChange={(e) => setFormData({ ...formData, sub_unit: e.target.value })}
+          placeholder="اترك فارغاً لوحدة واحدة فقط"
+        />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Input
+          label="معدل التحويل (كم وحدة فرعية في الوحدة الرئيسية)"
+          type="number"
+          min={0.001}
+          step="0.001"
+          value={formData.conversion_rate}
+          onChange={(e) => setFormData({ ...formData, conversion_rate: e.target.value })}
+          placeholder="مثال: 3"
+        />
+        <Input
+          label="سعر الوحدة الفرعية"
+          type="number"
+          min={0}
+          step="0.01"
+          value={formData.sub_unit_price}
+          onChange={(e) => setFormData({ ...formData, sub_unit_price: e.target.value })}
+          placeholder="مثال: 1000"
+        />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Input
           label="مدة تنبيه قبل انتهاء الصلاحية (أيام)"
           type="number"

@@ -34,6 +34,7 @@ interface NavChild {
   path: string
   icon: typeof LayoutDashboard
   permissions?: string[]
+  anyPermissions?: string[]
 }
 
 interface NavItem {
@@ -84,8 +85,7 @@ export default function Sidebar({ open, mobileOpen, onClose }: SidebarProps) {
       path: '/stores',
       anyPermissions: ['view_stores', 'create_stores', 'edit_stores', 'delete_stores', 'request_stock_for_store'],
       children: [
-        { label: 'إدارة المتاجر', path: '/stores', icon: ShoppingCart, permissions: ['view_stores', 'create_stores', 'edit_stores', 'delete_stores'] },
-        { label: 'طلب منتجات من المخزن', path: '/stores', icon: ArrowLeftRight, permissions: ['request_stock_for_store'] },
+        { label: 'إدارة الطلبات', path: '/stock-requests', icon: ArrowLeftRight, anyPermissions: ['manage_stock', 'request_stock_for_store', 'view_stores'] },
       ],
     },
     {
@@ -94,6 +94,8 @@ export default function Sidebar({ open, mobileOpen, onClose }: SidebarProps) {
       path: '/warehouses',
       anyPermissions: ['view_warehouses', 'view_inventory', 'view_products', 'manage_stock'],
       children: [
+        { label: 'المنتجات', path: '/products', icon: Package, permissions: ['view_products'] },
+        { label: 'التصنيفات', path: '/categories', icon: Book, permissions: ['view_categories'] },
         { label: 'المخازن والمستودعات', path: '/warehouses', icon: Warehouse, permissions: ['view_warehouses'] },
         { label: 'حركات المخزون', path: '/stock-movements', icon: Activity, permissions: ['view_inventory'] },
         { label: 'المشتريات', path: '/purchases', icon: Truck, permissions: ['view_purchases'] },
@@ -163,7 +165,7 @@ export default function Sidebar({ open, mobileOpen, onClose }: SidebarProps) {
 
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {menuItems.map((item) => {
-          const visibleChildren = (item.children || []).filter((child) => can(child.permissions))
+          const visibleChildren = (item.children || []).filter((child) => can(child.permissions, child.anyPermissions))
           const showItem = can(item.permissions, item.anyPermissions) || visibleChildren.length > 0
           if (!showItem) return null
           const Icon = item.icon

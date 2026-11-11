@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { api } from '../../services/api'
 import { useAuthStore } from '../../store/authStore'
 import { useSettingsStore, formatMoney } from '../../store/settingsStore'
-import { ArrowLeft, Search, Edit as PencilIcon, Trash2, ArrowLeftRight, Package, AlertTriangle, Clock } from 'lucide-react'
+import { ArrowLeft, Search, Edit as PencilIcon, ArrowLeftRight, RefreshCw, Package, AlertTriangle, Clock } from 'lucide-react'
 import Button from '../../components/common/buttons/Button'
 import Input from '../../components/common/inputs/Input'
 import Card from '../../components/common/cards/Card'
@@ -54,18 +54,159 @@ interface BatchProduct {
   }
 }
 
+interface StockRequest {
+  id: number
+  from_warehouse_id: number
+  to_warehouse_id: number
+  product_id: number
+  requested_quantity: number
+  status: string
+  created_at?: string
+  requested_by?: number
+  toWarehouse?: { id: number; name: string }
+  product?: { id: number; name: string }
+  requester?: { id: number; name: string }
+}
+
+interface StoreProduct {
+  id: number
+  name: string
+  barcode?: string | null
+  sale_price: number
+  cost_price: number
+  current_stock?: number
+  total_stock?: number
+  min_stock?: number
+  near_expiry_quantity?: number
+  low_stock?: boolean
+}
+
 export default function WarehouseDetailPage() {
   const { symbol } = useSettingsStore()
   const { id: warehouseId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const permissions = useAuthStore((state) => state.user?.permissions || [])
-  const canEditWarehouses = permissions.includes('edit_warehouses')
-  const canDeleteWarehouses = permissions.includes('delete_warehouses')
   const canManageStock = permissions.includes('manage_stock')
+  const canRequestStock = permissions.includes('request_stock_for_store')
 
+  const [showRequestsModal, setShowRequestsModal] = useState(false)
+  const [showRequestModal, setShowRequestModal] = useState(false)
+  const [showLogModal, setShowLogModal] = useState(false)
   const [showModal, setShowModal] = useState(false)
+  const [requestForm, setRequestForm] = useState<{
+    from_warehouse_id: number | string
+    product_id: number | string
+    quantity: number | string
+    notes: string
+  }>({
+    from_warehouse_id: '',
+    product_id: '',
+    quantity: '',
+    notes: '',
+  })
+  const [logDateFrom, setLogDateFrom] = useState('')
+  const [logDateTo, setLogDateTo] = useState('')
+  const [logProductId, setLogProductId] = useState('')
+
+  const { data: allRequests } = useQuery({
+    queryKey: ['stock-requests'],
+    queryFn: async () => {
+      const res = await api.get('/stock-requests')
+      return (res.data.data || []) as StockRequest[]
+    },
+    enabled: !!warehouseId && canManageStock,
+  })
+
+  const warehouseRequests = useMemo(() => {
+    if (!allRequests || !warehouseId) return []
+    return allRequests.filter((r) => r.from_warehouse_id === Number(warehouseId))
+  }, [allRequests, warehouseId])
+
+  const filteredLogRequests = useMemo(() => {
+    if (!warehouseRequests) return []
+    return warehouseRequests.filter((r) => {
+      if (logDateFrom && r.created_at && r.created_at.slice(0, 10) < logDateFrom) return false
+      if (logDateTo && r.created_at && r.created_at.slice(0, 10) > logDateTo) return false
+      if (logProductId && String(r.product_id) !== logProductId) return false
+      return true
+    })
+  }, [warehouseRequests, logDateFrom, logDateTo, logProductId])
+
+  const approveWarehouseRequest = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/approve`),
+    onSuccess: () => {
+      toast.success('تمت الموافقة على الطلب')
+      queryClient.invalidateQueries({ queryKey: ['stock-requests'] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر الموافقة على الطلب')),
+  })
+
+  const rejectWarehouseRequest = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/reject`),
+    onSuccess: () => {
+      toast.success('تم رفض الطلب')
+      queryClient.invalidateQueries({ queryKey: ['stock-requests'] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر رفض الطلب')),
+  })
+
+  const { data: warehousesForRequest } = useQuery({
+    queryKey: ['warehouses-for-request'],
+    queryFn: async () => {
+      const res = await api.get('/warehouses?type=warehouse')
+      return (res.data.warehouses || []) as WarehouseDetail[]
+    },
+    enabled: canRequestStock && !!warehouseId,
+  })
+
+  const { data: productsForRequest } = useQuery({
+    queryKey: ['products-for-request'],
+    queryFn: async () => {
+      const res = await api.get('/products?per_page=1000')
+      return (res.data.data || []) as StoreProduct[]
+    },
+    enabled: canRequestStock && !!warehouseId,
+  })
+
+  const { data: productsForLog } = useQuery({
+    queryKey: ['products-for-log'],
+    queryFn: async () => {
+      const res = await api.get('/products?per_page=1000')
+      return (res.data.data || []) as StoreProduct[]
+    },
+    enabled: canManageStock && !!warehouseId,
+  })
+
+  const createWarehouseRequestMutation = useMutation({
+    mutationFn: async (data: {
+      from_warehouse_id: number | string
+      product_id: number | string
+      quantity: number | string
+      notes: string
+    }) => {
+      await api.post('/stock-requests', {
+        from_warehouse_id: Number(data.from_warehouse_id),
+        to_warehouse_id: Number(warehouseId),
+        product_id: Number(data.product_id),
+        quantity: Number(data.quantity),
+        notes: data.notes || undefined,
+      })
+    },
+    onSuccess: () => {
+      toast.success('تم إرسال طلب المخزون')
+      setShowRequestModal(false)
+      setRequestForm({ from_warehouse_id: '', product_id: '', quantity: '', notes: '' })
+      queryClient.invalidateQueries({ queryKey: ['stock-requests'] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر إرسال الطلب')),
+  })
   const [editingWarehouse, setEditingWarehouse] = useState<WarehouseDetail | null>(null)
+  const [showBatchModal, setShowBatchModal] = useState(false)
+  const [editingBatch, setEditingBatch] = useState<BatchProduct | null>(null)
   const [productSearch, setProductSearch] = useState('')
+  const [batchQuantity, setBatchQuantity] = useState('')
+  const [batchBatchNumber, setBatchBatchNumber] = useState('')
+  const [batchExpiryDate, setBatchExpiryDate] = useState('')
   const queryClient = useQueryClient()
 
   const { data: warehouse, isLoading: warehouseLoading } = useQuery({
@@ -86,17 +227,18 @@ export default function WarehouseDetailPage() {
     enabled: !!warehouseId,
   })
 
-  const deleteWarehouseMutation = useMutation({
-    mutationFn: async () => {
-      await api.delete(`/warehouses/${warehouseId}`)
+  const updateBatchMutation = useMutation({
+    mutationFn: async (data: { id: number; quantity: number; batch_number?: string; expiry_date?: string }) => {
+      await api.put(`/warehouses/${warehouseId}/batches/${data.id}`, data)
     },
     onSuccess: () => {
-      toast.success('تم حذف المخزن')
+      toast.success('تم تعديل المنتج بنجاح')
+      setShowBatchModal(false)
+      setEditingBatch(null)
+      queryClient.invalidateQueries({ queryKey: ['warehouse-detail-batches', warehouseId] })
       queryClient.invalidateQueries({ queryKey: ['warehouses'] })
-      queryClient.invalidateQueries({ queryKey: ['stores'] })
-      navigate('/warehouses')
     },
-    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر حذف المخزن')),
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تعديل المنتج')),
   })
 
   const filteredProducts = useMemo(() => {
@@ -169,22 +311,23 @@ export default function WarehouseDetailPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {canEditWarehouses && (
-            <Button onClick={() => { setEditingWarehouse(warehouse); setShowModal(true) }}>
-              <PencilIcon className="w-4 h-4" />
-              تعديل
-            </Button>
-          )}
-          {canDeleteWarehouses && (
-            <Button variant="danger" onClick={() => deleteWarehouseMutation.mutate()}>
-              <Trash2 className="w-4 h-4" />
-              حذف
-            </Button>
-          )}
-          {canManageStock && (
-            <Button onClick={() => navigate('/warehouses')}>
+          {/* في صفحة المتجر: إظهار زر "طلب من المخزن" فقط */}
+          {warehouse?.type === 'store' && canRequestStock && (
+            <Button onClick={() => setShowRequestModal(true)}>
               <ArrowLeftRight className="w-4 h-4" />
-              نقل مخزون
+              طلب من المخزن
+            </Button>
+          )}
+          {/* في صفحة المخزن: إظهار زر "سجل الطلبات" فقط */}
+          {warehouse?.type !== 'store' && canManageStock && (
+            <Button onClick={() => {
+              setLogDateFrom('')
+              setLogDateTo('')
+              setLogProductId('')
+              setShowLogModal(true)
+            }}>
+              <RefreshCw className="w-4 h-4" />
+              سجل الطلبات
             </Button>
           )}
         </div>
@@ -234,6 +377,7 @@ export default function WarehouseDetailPage() {
                 <th className="px-3 py-2 text-start">تكلفة الوحدة</th>
                 <th className="px-3 py-2 text-start">تاريخ الصلاحية</th>
                 <th className="px-3 py-2 text-start">الحالة</th>
+                <th className="px-3 py-2 text-start">الإجراءات</th>
               </tr>
             </thead>
             <tbody>
@@ -255,7 +399,7 @@ export default function WarehouseDetailPage() {
                     <td className="px-3 py-2">{formatMoney(Number(batch.cost_price), symbol)}</td>
                     <td className="px-3 py-2">
                       {batch.product?.expiry_date ? (
-                        <span className={`text-xs ${new Date(batch.product.expiry_date) < new Date() ? 'text-red-600' : 'text-amber-600'}`}>
+                        <span className={`text-xs ${new Date(batch.product.expiry_date) < new Date() ? 'text-red-600 font-bold' : 'text-amber-600'}`}>
                           {formatDate(batch.product.expiry_date)}
                         </span>
                       ) : (
@@ -278,6 +422,21 @@ export default function WarehouseDetailPage() {
                           ? 'قريب النفاذ'
                           : 'متوفر'}
                       </Badge>
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingBatch(batch)
+                          setBatchQuantity(String(batch.quantity))
+                          setBatchBatchNumber(batch.batch_number || '')
+                          setBatchExpiryDate(batch.product?.expiry_date || '')
+                          setShowBatchModal(true)
+                        }}
+                        className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded" title="تعديل المنتج"
+                      >
+                        <PencilIcon className="w-4 h-4" />
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -310,6 +469,268 @@ export default function WarehouseDetailPage() {
             <Button type="submit" disabled>حفظ</Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit Batch Modal */}
+      <Modal
+        isOpen={showBatchModal}
+        onClose={() => { setShowBatchModal(false); setEditingBatch(null) }}
+        title={editingBatch ? 'تعديل منتج' : 'إضافة منتج'}
+        size="lg"
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!editingBatch) return
+            updateBatchMutation.mutate({
+              id: editingBatch.id,
+              quantity: Number(batchQuantity),
+              batch_number: batchBatchNumber || undefined,
+              expiry_date: batchExpiryDate || undefined,
+            })
+          }}
+        >
+          <Input
+            label="اسم المنتج"
+            value={editingBatch?.product?.name || ''}
+            readOnly
+          />
+          <Input
+            label="الكمية"
+            type="number"
+            min={0}
+            step="0.001"
+            value={batchQuantity}
+            onChange={(e) => setBatchQuantity(e.target.value)}
+            required
+          />
+          <Input
+            label="رقم الدفعة"
+            value={batchBatchNumber}
+            onChange={(e) => setBatchBatchNumber(e.target.value)}
+          />
+          <Input
+            label="تاريخ الصلاحية"
+            type="date"
+            value={batchExpiryDate}
+            onChange={(e) => setBatchExpiryDate(e.target.value)}
+          />
+          <div className="flex justify-end pt-4">
+            <Button variant="secondary" onClick={() => { setShowBatchModal(false); setEditingBatch(null) }}>إلغاء</Button>
+            <Button type="submit" loading={updateBatchMutation.isPending}>حفظ التعديل</Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Warehouse Requests Modal */}
+      <Modal
+        isOpen={showRequestsModal}
+        onClose={() => setShowRequestsModal(false)}
+        title={`طلبات مخزن ${warehouse?.name || ''}`}
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">طلبات صادرة من هذا المخزن</h3>
+            <Badge variant="info">{warehouseRequests.length} طلب</Badge>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th className="px-3 py-2 text-start">المتجر المطلوب له</th>
+                  <th className="px-3 py-2 text-start">المنتج</th>
+                  <th className="px-3 py-2 text-start">الكمية</th>
+                  <th className="px-3 py-2 text-start">مقدم الطلب</th>
+                  <th className="px-3 py-2 text-start">الحالة</th>
+                  <th className="px-3 py-2 text-start">الإجراء</th>
+                </tr>
+              </thead>
+              <tbody>
+                {warehouseRequests.length === 0 ? (
+                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-500">لا توجد طلبات صادرة من هذا المخزن</td></tr>
+                ) : (
+                  warehouseRequests.map((req) => (
+                    <tr key={req.id} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="px-3 py-2">{req.toWarehouse?.name || req.to_warehouse_id}</td>
+                      <td className="px-3 py-2">{req.product?.name || req.product_id}</td>
+                      <td className="px-3 py-2">{formatNumber(req.requested_quantity)}</td>
+                      <td className="px-3 py-2">{req.requester?.name || '-'}</td>
+                      <td className="px-3 py-2">
+                        <Badge
+                          variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : req.status === 'rejected' ? 'danger' : 'default'}
+                        >
+                          {req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'معتمد' : req.status === 'rejected' ? 'مرفوض' : req.status}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2">
+                        {req.status === 'pending' && (
+                          <div className="flex flex-wrap gap-1">
+                            <Button
+                              size="sm"
+                              variant="success"
+                              onClick={() => { setShowRequestsModal(false); approveWarehouseRequest.mutate(req.id) }}
+                            >
+                              قبول
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              onClick={() => { setShowRequestsModal(false); rejectWarehouseRequest.mutate(req.id) }}
+                            >
+                              رفض
+                            </Button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Store Request Modal (طلب من المخزن للمتجر) */}
+      <Modal
+        isOpen={showRequestModal}
+        onClose={() => setShowRequestModal(false)}
+        title={`طلب منتجات من المخزن - ${warehouse?.name || ''}`}
+        size="lg"
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            createWarehouseRequestMutation.mutate(requestForm)
+          }}
+        >
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="col-span-2">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">المخزن المصدر</label>
+              <select
+                value={requestForm.from_warehouse_id}
+                onChange={(e) => setRequestForm({ ...requestForm, from_warehouse_id: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg"
+                required
+              >
+                <option value="">اختر مخزناً</option>
+                {(warehousesForRequest || []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">المنتج</label>
+              <select
+                value={requestForm.product_id}
+                onChange={(e) => setRequestForm({ ...requestForm, product_id: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg"
+                required
+              >
+                <option value="">اختر منتجاً</option>
+                {(productsForRequest || []).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="col-span-1">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">الكمية</label>
+              <Input type="number" min={0.001} step="0.001" value={requestForm.quantity} onChange={(e) => setRequestForm({ ...requestForm, quantity: e.target.value })} />
+            </div>
+            <div className="col-span-1">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">ملاحظات</label>
+              <Input value={requestForm.notes} onChange={(e) => setRequestForm({ ...requestForm, notes: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setShowRequestModal(false)}>إلغاء</Button>
+            <Button type="submit" loading={createWarehouseRequestMutation.isPending}>إرسال الطلب</Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Requests Log Modal (سجل الطلبات للمخزن) */}
+      <Modal
+        isOpen={showLogModal}
+        onClose={() => setShowLogModal(false)}
+        title={`سجل طلبات مخزن ${warehouse?.name || ''}`}
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">من تاريخ</label>
+              <input
+                type="date"
+                value={logDateFrom}
+                onChange={(e) => setLogDateFrom(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg dark:bg-gray-900"
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">إلى تاريخ</label>
+              <input
+                type="date"
+                value={logDateTo}
+                onChange={(e) => setLogDateTo(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg dark:bg-gray-900"
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-2">
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">المنتج</label>
+              <select
+                value={logProductId}
+                onChange={(e) => setLogProductId(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg dark:bg-gray-900"
+              >
+                <option value="">جميع المنتجات</option>
+                {(productsForLog || []).map((p) => (
+                  <option key={p.id} value={String(p.id)}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th className="px-3 py-2 text-start">التاريخ</th>
+                  <th className="px-3 py-2 text-start">المنتج</th>
+                  <th className="px-3 py-2 text-start">الكمية المطلوبة</th>
+                  <th className="px-3 py-2 text-start">إلى المتجر</th>
+                  <th className="px-3 py-2 text-start">مقدم الطلب</th>
+                  <th className="px-3 py-2 text-start">الحالة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLogRequests.length === 0 ? (
+                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-500">لا توجد طلبات في هذا السجل</td></tr>
+                ) : (
+                  filteredLogRequests.map((req) => (
+                    <tr key={req.id} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="px-3 py-2">{req.created_at ? req.created_at.slice(0, 16).replace('T', ' ') : '-'}</td>
+                      <td className="px-3 py-2">{req.product?.name || req.product_id}</td>
+                      <td className="px-3 py-2">{formatNumber(req.requested_quantity)}</td>
+                      <td className="px-3 py-2">{req.toWarehouse?.name || req.to_warehouse_id}</td>
+                      <td className="px-3 py-2">{req.requester?.name || '-'}</td>
+                      <td className="px-3 py-2">
+                        <Badge
+                          variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : req.status === 'rejected' ? 'danger' : 'default'}
+                        >
+                          {req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'معتمد' : req.status === 'rejected' ? 'مرفوض' : req.status}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </Modal>
     </div>
   )

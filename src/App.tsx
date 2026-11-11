@@ -11,6 +11,7 @@ import LoginPage from './pages/auth/LoginPage'
 import DashboardPage from './pages/dashboard/DashboardPage'
 import POSPage from './pages/pos/POSPage'
 import StoresPage from './pages/stores/StoresPage'
+import ProductsPage from './pages/products/ProductsPage'
 import OrdersPage from './pages/orders/OrdersPage'
 import WarehousesPage from './pages/warehouses/WarehousesPage'
 import WarehouseDetailPage from './pages/warehouses/WarehouseDetailPage'
@@ -36,6 +37,7 @@ import ExpensesPage from './pages/expenses/ExpensesPage'
 import AttendancePage from './pages/attendance/AttendancePage'
 import ShiftsPage from './pages/shifts/ShiftsPage'
 import StockMovementsPage from './pages/stock/StockMovementsPage'
+import StockRequestsPage from './pages/stock-requests/StockRequestsPage'
 import NotificationsPage from './pages/notifications/NotificationsPage'
 import CategoriesPage from './pages/categories/CategoriesPage'
 import RolesPage from './pages/roles/RolesPage'
@@ -124,7 +126,15 @@ function App() {
               <Navigate to="/login" />
             )
           } />
-          <Route path="/products" element={<Navigate to="/warehouses" replace />} />
+          <Route path="/products" element={
+            isAuthenticated ? (
+              <MainLayout>
+                <ProductsPage />
+              </MainLayout>
+            ) : (
+              <Navigate to="/login" />
+            )
+          } />
           <Route path="/orders" element={
             isAuthenticated ? (
               <MainLayout>
@@ -156,6 +166,24 @@ function App() {
             isAuthenticated ? (
               <MainLayout>
                 <StoresPage />
+              </MainLayout>
+            ) : (
+              <Navigate to="/login" />
+            )
+          } />
+          <Route path="/stores/:id" element={
+            isAuthenticated ? (
+              <MainLayout>
+                <WarehouseDetailPage />
+              </MainLayout>
+            ) : (
+              <Navigate to="/login" />
+            )
+          } />
+          <Route path="/stock-requests" element={
+            isAuthenticated ? (
+              <MainLayout>
+                <StockRequestsPage />
               </MainLayout>
             ) : (
               <Navigate to="/login" />

@@ -53,8 +53,10 @@ interface CartItem {
   stock?: number
   track_inventory?: boolean
   unit?: string
+  unit_label?: string
   conversion_factor?: number
   is_sub_unit?: boolean
+  base_quantity?: number // الكمية بالوحدة الفرعية الأساسية (للتخزين الداخلي)
 }
 
 interface ProductSize {
@@ -149,6 +151,10 @@ interface OrderItem {
   total_price?: number
   subtotal?: number
   unit_price?: number
+  unit_type?: 'main' | 'sub'
+  unit_name?: string | null
+  conversion_factor?: number | null
+  base_quantity?: number | null
 }
 
 interface POSOrder {
@@ -191,6 +197,10 @@ interface OrderDraftItem {
   quantity: number
   size_id: number | string
   size_name: string
+  unit_type?: 'main' | 'sub'
+  unit_name?: string | null
+  conversion_factor?: number | null
+  base_quantity?: number | null
   modifier_options: OrderDraftModifier[]
 }
 
@@ -234,6 +244,10 @@ interface OrderCreateData {
     product_id: number
     quantity: number
     size_id?: number
+    unit_type?: 'main' | 'sub'
+    unit_name?: string
+    conversion_factor?: number
+    base_quantity?: number
     modifier_options?: Array<{ modifier_id: number; modifier_option_id: number }>
     notes?: string
   }>
@@ -544,6 +558,10 @@ export default function POSPage() {
         product_id: Number(item.product_id),
         quantity: Number(item.quantity),
         size_id: item.size_id || undefined,
+        unit_type: item.unit_type,
+        unit_name: item.unit_name,
+        conversion_factor: item.conversion_factor,
+        base_quantity: item.base_quantity,
         modifier_options: item.modifier_options || [],
       }))
       await api.put(`/orders/${editingOrder.id}`, { items })
@@ -611,6 +629,10 @@ export default function POSPage() {
       quantity: Number(item.quantity) || 1,
       size_id: item.size_id || item.size?.id || '',
       size_name: item.size?.name || '',
+      unit_type: item.unit_type,
+      unit_name: item.unit_name,
+      conversion_factor: item.conversion_factor,
+      base_quantity: item.base_quantity,
       modifier_options: (item.modifier_options || item.modifierOptions || item.modifiers || []).map((option) => ({
         modifier_id: option.modifier_id || (typeof option.modifier === 'object' ? option.modifier.id : undefined),
         modifier_option_id: option.modifier_option_id || option.id,
@@ -1005,10 +1027,12 @@ export default function POSPage() {
     }
 
     const nameSuffix = size ? ` (${size.name})` : ''
-    const unitLabel = isSubUnit ? ` (${product.sub_unit})` : ''
+    const unitLabel = isSubUnit ? product.sub_unit ?? product.sale_unit : product.sale_unit
+    // الكمية بالوحدة الأساسية (الفرعية) للتخزين الداخلي والتحويل
+    const baseQty = isSubUnit ? 1 : conversionFactor
     const cartItem: CartItem = {
       product_id: product.id,
-      name: product.name + nameSuffix + unitLabel,
+      name: product.name + nameSuffix + (isSubUnit ? ` (${product.sub_unit})` : ''),
       image: product.image,
       price,
       quantity: 1,
@@ -1017,9 +1041,11 @@ export default function POSPage() {
       modifiers,
       stock: effectiveStock,
       track_inventory: product.track_inventory,
-      unit: isSubUnit ? product.sub_unit ?? undefined : undefined,
+      unit: isSubUnit ? product.sub_unit ?? undefined : product.sale_unit ?? undefined,
+      unit_label: unitLabel ?? undefined,
       conversion_factor: isSubUnit ? conversionFactor : undefined,
       is_sub_unit: isSubUnit,
+      base_quantity: baseQty,
     }
     const existing = cart.find(
       (item) =>
@@ -1035,7 +1061,15 @@ export default function POSPage() {
         return
       }
       setCart(
-        cart.map((item) => (item === existing ? { ...item, quantity: item.quantity + 1 } : item))
+        cart.map((item) =>
+          item === existing
+            ? {
+                ...item,
+                quantity: item.quantity + 1,
+                base_quantity: Number(item.base_quantity ?? 0) + baseQty,
+              }
+            : item
+        )
       )
     } else {
       setCart([...cart, cartItem])
@@ -1126,7 +1160,9 @@ export default function POSPage() {
       toast.error('الكمية المطلوبة تتجاوز الرصيد المتاح في المخزن')
       return
     }
+    const itemBaseQty = item.is_sub_unit ? 1 : Number(item.conversion_factor ?? 1)
     item.quantity += delta
+    item.base_quantity = Number(item.base_quantity ?? 0) + itemBaseQty * delta
     if (item.quantity <= 0) {
       newCart.splice(index, 1)
     }
@@ -1135,6 +1171,20 @@ export default function POSPage() {
 
   const removeFromCart = (index: number) => {
     setCart(cart.filter((_, i) => i !== index))
+  }
+
+  const formatCartQuantity = (item: CartItem) => {
+    if (item.is_sub_unit && item.conversion_factor && Number(item.conversion_factor) > 1) {
+      const base = Number(item.base_quantity ?? 0)
+      const conv = Number(item.conversion_factor)
+      const main = Math.floor(base / conv)
+      const sub = base % conv
+      const parts: string[] = []
+      if (main > 0) parts.push(`${main} ${item.unit_label ?? item.unit ?? ''}`)
+      if (sub > 0) parts.push(`${sub} ${item.unit ?? ''}`)
+      return parts.length > 0 ? parts.join(' + ') : `0 ${item.unit_label ?? item.unit ?? ''}`
+    }
+    return `${item.quantity} ${item.unit_label ?? item.unit ?? ''}`
   }
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
@@ -1286,6 +1336,10 @@ export default function POSPage() {
         product_id: item.product_id,
         quantity: item.quantity,
         size_id: item.size_id,
+        unit_type: (item.is_sub_unit ? 'sub' : 'main') as 'main' | 'sub',
+        unit_name: item.unit ?? item.unit_label ?? undefined,
+        conversion_factor: item.conversion_factor ?? undefined,
+        base_quantity: item.base_quantity ?? undefined,
         notes: item.notes,
         modifier_options: item.modifiers.map((m) => ({
           modifier_id: m.modifier_id,
@@ -1681,7 +1735,7 @@ export default function POSPage() {
                       </p>
                     )}
                     <p className="text-xs text-gray-500">
-                      {formatMoney(item.price, currencySymbol)} × {item.quantity}
+                      {formatMoney(item.price, currencySymbol)} × {formatCartQuantity(item)}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1691,7 +1745,7 @@ export default function POSPage() {
                     >
                       <Minus className="w-3 h-3" />
                     </button>
-                    <span className="w-6 text-center font-medium text-sm">{item.quantity}</span>
+                    <span className="w-6 text-center font-medium text-sm">{formatCartQuantity(item)}</span>
                     <button
                       onClick={() => updateQuantity(index, 1)}
                       className="w-7 h-7 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-300 dark:hover:bg-gray-600"
