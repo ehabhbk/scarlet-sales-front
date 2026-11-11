@@ -34,6 +34,8 @@ interface ShiftOrder {
   table_name?: string
   cashier_name?: string
   cashier?: { name?: string }
+  warehouse_id?: number | null
+  warehouse_name?: string | null
   status: string
   total_amount: number
   amount_paid: number
@@ -557,6 +559,7 @@ export default function ReportsPage() {
           <td class="nowrap">${escapeHtml(formatTime(order.created_at))}</td>
           <td>${escapeHtml(typeLabel)}${tableLabel ? `<br/>${tableLabel}` : ''}</td>
           <td class="items">${escapeHtml(items || '-')}</td>
+          <td>${escapeHtml(order.warehouse_name || '-')}</td>
           <td class="num">${money(order.total_amount)}</td>
           <td class="num">${money(order.amount_paid)}</td>
           <td class="items">${methods || '-'}</td>
@@ -689,9 +692,9 @@ export default function ReportsPage() {
           ${
             orderRowsHtml
               ? `<table>
-                  <thead><tr><th>#</th><th>رقم الطلب</th><th>الوقت</th><th>النوع / الطاولة</th><th>الأصناف</th><th>الإجمالي</th><th>المدفوع</th><th>تفاصيل الدفع</th><th>المستخدم</th></tr></thead>
+                  <thead><tr><th>#</th><th>رقم الطلب</th><th>الوقت</th><th>النوع / الطاولة</th><th>الأصناف</th><th>المخزن</th><th>الإجمالي</th><th>المدفوع</th><th>تفاصيل الدفع</th><th>المستخدم</th></tr></thead>
                   <tbody>${orderRowsHtml}</tbody>
-                  <tfoot><tr><th colspan="5">الإجمالي (${shiftOrders.length} طلب)</th><th class="num">${money(shiftOrders.reduce((sum: number, order) => sum + (Number(order.total_amount) || 0), 0))}</th><th class="num">${money(shiftOrders.reduce((sum: number, order) => sum + (Number(order.amount_paid) || 0), 0))}</th><th colspan="2"></th></tr></tfoot>
+                  <tfoot><tr><th colspan="6">الإجمالي (${shiftOrders.length} طلب)</th><th class="num">${money(shiftOrders.reduce((sum: number, order) => sum + (Number(order.total_amount) || 0), 0))}</th><th class="num">${money(shiftOrders.reduce((sum: number, order) => sum + (Number(order.amount_paid) || 0), 0))}</th><th colspan="2"></th></tr></tfoot>
                 </table>`
               : '<div class="empty">لا توجد طلبات في هذه الوردية</div>'
           }
@@ -858,16 +861,17 @@ export default function ReportsPage() {
                           <th className="px-3 py-2 text-start">الوقت</th>
                           <th className="px-3 py-2 text-start">النوع / الطاولة</th>
                           <th className="px-3 py-2 text-start">الأصناف</th>
+                          <th className="px-3 py-2 text-start">المخزن</th>
                           <th className="px-3 py-2 text-start">الإجمالي</th>
                           <th className="px-3 py-2 text-start">المدفوع</th>
                           <th className="px-3 py-2 text-start">تفاصيل الدفع</th>
-                          <th className="px-3 py-2 text-start">الحالة</th>
+                          <th className="px-3 py-2 text-start">الكاشير</th>
                         </tr>
                       </thead>
                       <tbody>
                         {shiftOrders.length === 0 ? (
                           <tr>
-                            <td className="px-3 py-4 text-center text-gray-500" colSpan={8}>لا توجد طلبات في هذه الوردية</td>
+                            <td className="px-3 py-4 text-center text-gray-500" colSpan={9}>لا توجد طلبات في هذه الوردية</td>
                           </tr>
                         ) : (
                           shiftOrders.map((order) => (
@@ -881,6 +885,7 @@ export default function ReportsPage() {
                               <td className="px-3 py-2 max-w-[220px] text-xs text-gray-600 dark:text-gray-300">
                                 {(order.items || []).map((item) => `${item.name} × ${item.quantity}`).join('، ') || '-'}
                               </td>
+                              <td className="px-3 py-2 whitespace-nowrap">{order.warehouse_name || '-'}</td>
                               <td className="px-3 py-2 whitespace-nowrap">{formatMoney(Number(order.total_amount) || 0, symbol)}</td>
                               <td className="px-3 py-2 whitespace-nowrap">{formatMoney(Number(order.amount_paid) || 0, symbol)}</td>
                               <td className="px-3 py-2 text-xs">

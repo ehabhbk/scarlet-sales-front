@@ -31,7 +31,7 @@ interface ProductRecord {
   purchase_unit?: string | null
   main_unit?: string | null
   sub_unit?: string | null
-  conversion_rate?: number | null
+  conversion_factor?: number | null
   sub_unit_price?: number | null
   expiry_alert_days?: number
   low_stock_threshold?: number
@@ -299,7 +299,7 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
     purchase_unit: string
     main_unit: string
     sub_unit: string
-    conversion_rate: number | string
+    conversion_factor: number | string
     sub_unit_price: number | string
     expiry_alert_days: number | string
     low_stock_threshold: number | string
@@ -320,7 +320,7 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
     purchase_unit: product?.purchase_unit || '',
     main_unit: product?.main_unit || '',
     sub_unit: product?.sub_unit || '',
-    conversion_rate: product?.conversion_rate ?? '',
+    conversion_factor: product?.conversion_factor ?? '',
     sub_unit_price: product?.sub_unit_price ?? '',
     expiry_alert_days: product?.expiry_alert_days ?? 30,
     low_stock_threshold: product?.low_stock_threshold ?? 5,
@@ -353,7 +353,7 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
       data.append('purchase_unit', formData.purchase_unit.trim())
       data.append('main_unit', formData.main_unit.trim())
       data.append('sub_unit', formData.sub_unit.trim())
-      if (String(formData.conversion_rate).trim()) data.append('conversion_rate', String(formData.conversion_rate))
+      if (String(formData.conversion_factor).trim()) data.append('conversion_factor', String(formData.conversion_factor))
       if (String(formData.sub_unit_price).trim()) data.append('sub_unit_price', String(formData.sub_unit_price))
       data.append('expiry_alert_days', String(formData.expiry_alert_days))
       data.append('low_stock_threshold', String(formData.low_stock_threshold))
@@ -479,8 +479,8 @@ function ProductForm({ product, categories, warehouses, onClose, onSuccess }: Pr
           type="number"
           min={0.001}
           step="0.001"
-          value={formData.conversion_rate}
-          onChange={(e) => setFormData({ ...formData, conversion_rate: e.target.value })}
+          value={formData.conversion_factor}
+          onChange={(e) => setFormData({ ...formData, conversion_factor: e.target.value })}
           placeholder="مثال: 3"
         />
         <Input

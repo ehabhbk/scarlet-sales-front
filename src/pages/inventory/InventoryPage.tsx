@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../services/api'
-import { useSettingsStore, formatMoney } from '../../store/settingsStore'
-import { Plus, Search, Edit, Trash2, AlertTriangle } from 'lucide-react'
+import { useSettingsStore, formatMoney, mediaUrl } from '../../store/settingsStore'
+import { Plus, Search, Edit, Trash2, AlertTriangle, ImageIcon } from 'lucide-react'
 import Button from '../../components/common/buttons/Button'
 import Input from '../../components/common/inputs/Input'
 import Card from '../../components/common/cards/Card'
@@ -12,6 +12,7 @@ import Badge from '../../components/common/data-display/Badge'
 import Pagination from '../../components/common/Pagination'
 import { toast } from 'sonner'
 import { formatNumber } from '../../utils/format'
+import { getApiErrorMessage } from '../../utils/apiError'
 
 interface InventoryProduct {
   id: number
@@ -19,15 +20,25 @@ interface InventoryProduct {
   sku?: string | null
   barcode?: string | null
   category?: { name: string } | string
+  category_id?: number | null
   sale_price: number
   cost_price: number
   current_stock: number
   min_stock?: number
   sale_unit?: string | null
   purchase_unit?: string | null
+  main_unit?: string | null
+  sub_unit?: string | null
+  conversion_factor?: number | null
+  sub_unit_price?: number | null
   total_stock?: number
   is_available: boolean
   image?: string | null
+}
+
+interface CategoryOption {
+  id: number
+  name: string
 }
 
 export default function InventoryPage() {
@@ -47,6 +58,14 @@ export default function InventoryPage() {
   })
   const items = itemsRes?.data as InventoryProduct[] | undefined
   const itemsMeta = itemsRes ? { current_page: itemsRes.current_page, last_page: itemsRes.last_page, total: itemsRes.total, per_page: itemsRes.per_page } : null
+
+  const { data: categories } = useQuery({
+    queryKey: ['categories'],
+    queryFn: async () => {
+      const res = await api.get('/categories')
+      return (res.data.categories || res.data.data || []) as CategoryOption[]
+    },
+  })
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => {
@@ -146,6 +165,7 @@ export default function InventoryPage() {
       >
         <InventoryForm
           item={editingItem}
+          categories={categories || []}
           onClose={() => setShowModal(false)}
           onSuccess={() => {
             setShowModal(false)
@@ -158,9 +178,15 @@ export default function InventoryPage() {
   )
 }
 
-function InventoryForm({ item, onClose, onSuccess }: { item: InventoryProduct | null; onClose: () => void; onSuccess: () => void }) {
+function InventoryForm({ item, categories, onClose, onSuccess }: {
+  item: InventoryProduct | null
+  categories: CategoryOption[]
+  onClose: () => void
+  onSuccess: () => void
+}) {
   const [formData, setFormData] = useState<{
     name: string
+    category_id: number | string
     sku: string
     barcode: string
     sale_price: number | string
@@ -168,43 +194,134 @@ function InventoryForm({ item, onClose, onSuccess }: { item: InventoryProduct | 
     min_stock: number | string
     sale_unit: string
     purchase_unit: string
+    main_unit: string
+    sub_unit: string
+    conversion_factor: number | string
+    sub_unit_price: number | string
     is_available: boolean
   }>({
     name: item?.name || '',
+    category_id: item?.category_id || '',
     sku: item?.sku || '',
     barcode: item?.barcode || '',
-    sale_price: item?.sale_price || '',
-    cost_price: item?.cost_price || '',
+    sale_price: item?.sale_price ?? '',
+    cost_price: item?.cost_price ?? '',
     min_stock: item?.min_stock ?? 0,
     sale_unit: item?.sale_unit || '',
     purchase_unit: item?.purchase_unit || '',
+    main_unit: item?.main_unit || '',
+    sub_unit: item?.sub_unit || '',
+    conversion_factor: item?.conversion_factor ?? '',
+    sub_unit_price: item?.sub_unit_price ?? '',
     is_available: item?.is_available ?? true,
   })
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState(item?.image ? mediaUrl(item.image) : '')
+
+  useEffect(() => {
+    return () => {
+      if (imagePreview.startsWith('blob:')) URL.revokeObjectURL(imagePreview)
+    }
+  }, [imagePreview])
 
   const mutation = useMutation({
-    mutationFn: async (data: Record<string, unknown>) => {
+    mutationFn: async () => {
+      const data = new FormData()
+      data.append('name', formData.name)
+      if (String(formData.category_id).trim()) data.append('category_id', String(formData.category_id))
+      if (formData.sku.trim()) data.append('sku', formData.sku.trim())
+      if (formData.barcode.trim()) data.append('barcode', formData.barcode.trim())
+      data.append('sale_price', String(formData.sale_price))
+      data.append('cost_price', String(formData.cost_price))
+      data.append('min_stock', String(formData.min_stock))
+      if (formData.sale_unit.trim()) data.append('sale_unit', formData.sale_unit.trim())
+      if (formData.purchase_unit.trim()) data.append('purchase_unit', formData.purchase_unit.trim())
+      if (formData.main_unit.trim()) data.append('main_unit', formData.main_unit.trim())
+      if (formData.sub_unit.trim()) data.append('sub_unit', formData.sub_unit.trim())
+      if (String(formData.conversion_factor).trim()) {
+        data.append('conversion_factor', String(formData.conversion_factor))
+      }
+      if (String(formData.sub_unit_price).trim()) {
+        data.append('sub_unit_price', String(formData.sub_unit_price))
+      }
+      data.append('is_available', formData.is_available ? '1' : '0')
+      if (imageFile) data.append('image_file', imageFile)
+
       if (item) {
-        await api.put(`/products/${item.id}`, data)
+        data.append('_method', 'PUT')
+        await api.post(`/products/${item.id}`, data, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
       } else {
-        await api.post('/products', data)
+        await api.post('/products', data, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
       }
     },
-    onSuccess,
+    onSuccess: () => {
+      toast.success(item ? 'تم تحديث المنتج' : 'تم إضافة المنتج')
+      onSuccess()
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر حفظ المنتج')),
   })
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    mutation.mutate(formData)
+    mutation.mutate()
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <Input
-        label="اسم المنتج"
-        value={formData.name}
-        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-        required
-      />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto,1fr]">
+        <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-200">صورة المنتج</label>
+          <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-xl border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800">
+            {imagePreview ? (
+              <img src={imagePreview} alt="معاينة صورة المنتج" className="h-full w-full object-cover" />
+            ) : (
+              <ImageIcon className="h-8 w-8 text-gray-400" />
+            )}
+          </div>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              const file = e.target.files?.[0] || null
+              setImageFile(file)
+              setImagePreview(file ? URL.createObjectURL(file) : item?.image ? mediaUrl(item.image) : '')
+            }}
+            className="mt-2 block w-full max-w-[12rem] text-xs"
+          />
+        </div>
+        <Input
+          label="اسم المنتج"
+          value={formData.name}
+          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          required
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-200">التصنيف</label>
+          <select
+            value={formData.category_id}
+            onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
+            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 dark:border-gray-700 dark:bg-gray-900"
+          >
+            <option value="">بدون تصنيف</option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>{category.name}</option>
+            ))}
+          </select>
+        </div>
+        <Input
+          label="الباركود"
+          value={formData.barcode}
+          onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+          placeholder="امسح الباركود أو أدخله يدوياً"
+        />
+      </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Input
@@ -213,9 +330,11 @@ function InventoryForm({ item, onClose, onSuccess }: { item: InventoryProduct | 
           onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
         />
         <Input
-          label="الباركود"
-          value={formData.barcode}
-          onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+          label="الحد الأدنى للمخزون"
+          type="number"
+          min={0}
+          value={formData.min_stock}
+          onChange={(e) => setFormData({ ...formData, min_stock: e.target.value })}
         />
       </div>
 
@@ -255,20 +374,45 @@ function InventoryForm({ item, onClose, onSuccess }: { item: InventoryProduct | 
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Input
-          label="الحد الأدنى للمخزون"
+          label="الوحدة الأساسية"
+          value={formData.main_unit}
+          placeholder="مثال: كرتون"
+          onChange={(e) => setFormData({ ...formData, main_unit: e.target.value })}
+        />
+        <Input
+          label="الوحدة الفرعية"
+          value={formData.sub_unit}
+          placeholder="مثال: قطعة"
+          onChange={(e) => setFormData({ ...formData, sub_unit: e.target.value })}
+        />
+        <Input
+          label="معامل التحويل"
           type="number"
           min={0}
-          value={formData.min_stock}
-          onChange={(e) => setFormData({ ...formData, min_stock: e.target.value })}
+          step="0.001"
+          value={formData.conversion_factor}
+          placeholder="عدد الوحدات الفرعية في الأساسية"
+          onChange={(e) => setFormData({ ...formData, conversion_factor: e.target.value })}
         />
-        <label className="flex items-center gap-2 text-sm">
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Input
+          label="سعر الوحدة الفرعية (اختياري)"
+          type="number"
+          min={0}
+          step="0.01"
+          value={formData.sub_unit_price}
+          onChange={(e) => setFormData({ ...formData, sub_unit_price: e.target.value })}
+        />
+        <label className="flex items-center gap-2 self-end pb-2 text-sm">
           <input
             type="checkbox"
             checked={formData.is_available}
             onChange={(e) => setFormData({ ...formData, is_available: e.target.checked })}
-            className="w-4 h-4"
+            className="h-4 w-4"
           />
           متاح للبيع
         </label>

@@ -39,12 +39,31 @@ interface PurchaseLineItem {
   batch_number: string
 }
 
+interface UnitOption {
+  id: number
+  name: string
+  abbreviation?: string | null
+  is_active?: boolean
+}
+
+const PURCHASE_STATUSES = [
+  { value: 'draft', label: 'مسودة' },
+  { value: 'ordered', label: 'مطلوب' },
+  { value: 'received', label: 'مستلم' },
+  { value: 'cancelled', label: 'ملغي' },
+] as const
+
+function purchaseStatusLabel(status: string): string {
+  return PURCHASE_STATUSES.find((item) => item.value === status)?.label || status
+}
+
 interface PurchaseFormProps {
   suppliers: { id: number; name: string }[]
   products: { id: number; name: string; cost_price: number; main_unit?: string | null; sub_unit?: string | null; conversion_factor?: number | null }[]
   warehouses: { id: number; name: string }[]
   accounts: { id: number; code: string; name: string; type: string; is_active: boolean }[]
   paymentMethods: { value: string; label: string }[]
+  units: UnitOption[]
   onClose: () => void
   onSuccess: () => void
 }
@@ -53,6 +72,7 @@ export default function PurchasesPage() {
   const { symbol, paymentMethods } = useSettingsStore()
   const permissions = useAuthStore((state) => state.user?.permissions || [])
   const canCreate = permissions.includes('create_purchases')
+  const canEdit = permissions.includes('edit_purchases')
   const [showModal, setShowModal] = useState(false)
   const [payingPurchase, setPayingPurchase] = useState<PurchaseRecord | null>(null)
   const queryClient = useQueryClient()
@@ -96,6 +116,11 @@ export default function PurchasesPage() {
     queryFn: async () => ((await api.get('/accounts')).data?.accounts || []) as PurchaseFormProps['accounts'],
   })
 
+  const { data: units } = useQuery({
+    queryKey: ['inventory-units'],
+    queryFn: async () => ((await api.get('/inventory-units')).data?.units || []) as UnitOption[],
+  })
+
   const paymentMutation = useMutation({
     mutationFn: async ({ purchaseId, amount, method }: { purchaseId: number; amount: number; method: string }) =>
       api.post(`/purchases/${purchaseId}/payment`, { amount, method }),
@@ -109,10 +134,57 @@ export default function PurchasesPage() {
     onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تسجيل الدفعة')),
   })
 
+  const statusMutation = useMutation({
+    mutationFn: async ({ purchaseId, status }: { purchaseId: number; status: string }) =>
+      api.put(`/purchases/${purchaseId}`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['purchases'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouses'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse-detail'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse-detail-batches'] })
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      queryClient.invalidateQueries({ queryKey: ['inventory-products'] })
+      toast.success('تم تحديث حالة طلب الشراء')
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تحديث حالة الطلب')),
+  })
+
   const columns: Column<PurchaseRecord>[] = [
     { key: 'purchase_number', header: 'رقم الطلب' },
     { key: 'supplier', header: 'المورد', render: (p) => p.supplier?.name || '-' },
-    { key: 'status', header: 'الحالة', render: (p) => <Badge variant={p.status === 'received' ? 'success' : 'warning'}>{p.status}</Badge> },
+    {
+      key: 'status',
+      header: 'الحالة',
+      render: (p) =>
+        canEdit && p.status !== 'cancelled' ? (
+          <select
+            value={p.status}
+            disabled={statusMutation.isPending}
+            onChange={(event) => {
+              const nextStatus = event.target.value
+              if (nextStatus === p.status) return
+              if (
+                nextStatus === 'received' &&
+                !window.confirm('سيتم إضافة كميات هذا الطلب إلى المخازن/المتاجر المحددة. هل تريد المتابعة؟')
+              ) {
+                return
+              }
+              statusMutation.mutate({ purchaseId: p.id, status: nextStatus })
+            }}
+            className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+          >
+            {PURCHASE_STATUSES.map((status) => (
+              <option key={status.value} value={status.value}>
+                {status.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <Badge variant={p.status === 'received' ? 'success' : p.status === 'cancelled' ? 'danger' : 'warning'}>
+            {purchaseStatusLabel(p.status)}
+          </Badge>
+        ),
+    },
     { key: 'total_amount', header: 'المبلغ', render: (p) => formatMoney(p.total_amount, symbol) },
     { key: 'amount_paid', header: 'المدفوع', render: (p) => formatMoney(p.amount_paid, symbol) },
     { key: 'account', header: 'حساب الشراء', render: (p) => p.account?.name || '-' },
@@ -141,7 +213,7 @@ export default function PurchasesPage() {
         <DataTable data={list} columns={columns} loading={isLoading} emptyMessage="لا توجد مشتريات" />
       </Card>
       {canCreate && <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة طلب شراء" size="lg">
-        <PurchaseForm suppliers={suppliers || []} products={products || []} warehouses={warehouses || []} accounts={accounts || []} paymentMethods={paymentMethods} onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); queryClient.invalidateQueries({ queryKey: ['purchases'] }); queryClient.invalidateQueries({ queryKey: ['journal-entries'] }); queryClient.invalidateQueries({ queryKey: ['chart-of-accounts'] }) }} />
+        <PurchaseForm suppliers={suppliers || []} products={products || []} warehouses={warehouses || []} accounts={accounts || []} paymentMethods={paymentMethods} units={units || []} onClose={() => setShowModal(false)} onSuccess={() => { setShowModal(false); queryClient.invalidateQueries({ queryKey: ['purchases'] }); queryClient.invalidateQueries({ queryKey: ['journal-entries'] }); queryClient.invalidateQueries({ queryKey: ['chart-of-accounts'] }) }} />
       </Modal>}
       {canCreate && <Modal isOpen={!!payingPurchase} onClose={() => setPayingPurchase(null)} title="تسجيل دفعة مشتريات">
         {payingPurchase && (
@@ -196,7 +268,16 @@ function PurchasePaymentForm({ purchase, paymentMethods, loading, onClose, onSub
   )
 }
 
-function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethods, onClose, onSuccess }: PurchaseFormProps) {
+function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethods, units, onClose, onSuccess }: PurchaseFormProps) {
+  const emptyLine = (): PurchaseLineItem => ({ product_id: '', warehouse_id: '', main_quantity: 1, sub_quantity_per_main: 0, unit_name: '', sub_unit_name: '', quantity: 1, unit_cost: 0, expiry_date: '', batch_number: '' })
+  const activeUnits = units.filter((unit) => unit.is_active !== false)
+  const unitLabel = (unit: UnitOption) => (unit.abbreviation ? `${unit.name} (${unit.abbreviation})` : unit.name)
+  const findUnitName = (value?: string | null) => {
+    if (!value) return ''
+    const match = activeUnits.find((unit) => unit.name === value || unit.abbreviation === value)
+    return match?.name || ''
+  }
+
   const [formData, setFormData] = useState({
     supplier_id: '',
     account_id: '',
@@ -209,7 +290,7 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
     payment_method: paymentMethods[0]?.value || '',
     notes: '',
   })
-  const [lineItems, setLineItems] = useState<PurchaseLineItem[]>([{ product_id: '', warehouse_id: '', main_quantity: 1, sub_quantity_per_main: 0, unit_name: '', sub_unit_name: '', quantity: 1, unit_cost: 0, expiry_date: '', batch_number: '' }])
+  const [lineItems, setLineItems] = useState<PurchaseLineItem[]>([emptyLine()])
   const subtotal = lineItems.reduce((sum, item) => sum + Number(item.main_quantity || 0) * Number(item.unit_cost || 0), 0)
   const totalAmount = subtotal + Number(formData.tax_amount || 0)
 
@@ -223,6 +304,11 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    const hasSameUnit = lineItems.some((li) => li.unit_name && li.sub_unit_name && li.unit_name === li.sub_unit_name)
+    if (hasSameUnit) {
+      toast.error('لا يمكن اختيار نفس الوحدة كوحدة أساسية وفرعية لنفس المنتج')
+      return
+    }
     const payload = {
       ...formData,
       account_id: Number(formData.account_id),
@@ -246,11 +332,36 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
     mutation.mutate(payload)
   }
 
-  const addLine = () => setLineItems([...lineItems, { product_id: '', warehouse_id: '', main_quantity: 1, sub_quantity_per_main: 0, unit_name: '', sub_unit_name: '', quantity: 1, unit_cost: 0, expiry_date: '', batch_number: '' }])
+  const addLine = () => setLineItems([...lineItems, emptyLine()])
   const removeLine = (idx: number) => setLineItems(lineItems.filter((_, i) => i !== idx))
   const updateLine = (idx: number, field: keyof PurchaseLineItem, value: string | number) => {
     const next = [...lineItems]
     next[idx] = { ...next[idx], [field]: value }
+    setLineItems(next)
+  }
+  const handleProductChange = (idx: number, productId: string) => {
+    const product = products.find((prod) => String(prod.id) === productId)
+    const mainUnit = findUnitName(product?.main_unit)
+    const subUnit = findUnitName(product?.sub_unit)
+    const next = [...lineItems]
+    next[idx] = {
+      ...next[idx],
+      product_id: productId,
+      unit_name: mainUnit,
+      sub_unit_name: subUnit && subUnit !== mainUnit ? subUnit : '',
+      sub_quantity_per_main: subUnit && subUnit !== mainUnit && product?.conversion_factor
+        ? product.conversion_factor
+        : next[idx].sub_quantity_per_main,
+    }
+    setLineItems(next)
+  }
+  const updateMainUnit = (idx: number, value: string) => {
+    const next = [...lineItems]
+    next[idx] = {
+      ...next[idx],
+      unit_name: value,
+      sub_unit_name: next[idx].sub_unit_name === value ? '' : next[idx].sub_unit_name,
+    }
     setLineItems(next)
   }
 
@@ -303,65 +414,79 @@ function PurchaseForm({ suppliers, products, warehouses, accounts, paymentMethod
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300">المنتجات</label>
           <Button type="button" size="sm" variant="secondary" onClick={addLine}>+ إضافة منتج</Button>
         </div>
-        <div className="space-y-2">
+        {activeUnits.length === 0 && (
+          <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
+            لا توجد وحدات قياس متاحة. أضف الوحدات أولاً من صفحة وحدات القياس.
+          </p>
+        )}
+        <div className="space-y-3">
           {lineItems.map((li, idx) => {
             return (
-              <div key={idx} className="grid grid-cols-2 items-end gap-2 sm:grid-cols-8">
-                <div className="col-span-3">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المنتج</label>
-                  <select value={li.product_id} onChange={(e) => {
-                    updateLine(idx, 'product_id', e.target.value)
-                    const p = products.find((prod) => String(prod.id) === e.target.value)
-                    if (p) {
-                      updateLine(idx, 'unit_name', p.main_unit || '')
-                      updateLine(idx, 'sub_unit_name', p.sub_unit || '')
-                    }
-                  }} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
-                    <option value="">اختر منتجاً</option>
-                    {products.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-                  </select>
+              <div key={idx} className="rounded-lg border border-gray-200 dark:border-gray-800 p-3 space-y-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
+                  <div className="sm:col-span-6">
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المنتج</label>
+                    <select value={li.product_id} onChange={(e) => handleProductChange(idx, e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
+                      <option value="">اختر منتجاً</option>
+                      {products.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="sm:col-span-5">
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المخزن</label>
+                    <select value={li.warehouse_id} onChange={(e) => updateLine(idx, 'warehouse_id', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
+                      <option value="">اختر مخزناً</option>
+                      {warehouses.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-end justify-end sm:col-span-1">
+                    {lineItems.length > 1 && (
+                      <button type="button" onClick={() => removeLine(idx)} className="p-2 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded">×</button>
+                    )}
+                  </div>
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">المخزن</label>
-                  <select value={li.warehouse_id} onChange={(e) => updateLine(idx, 'warehouse_id', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
-                    <option value="">اختر مخزناً</option>
-                    {warehouses.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-                  </select>
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الوحدة الأساسية</label>
+                    <select value={li.unit_name} onChange={(e) => updateMainUnit(idx, e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm" required>
+                      <option value="">اختر الوحدة</option>
+                      {activeUnits.map((unit) => <option key={unit.id} value={unit.name}>{unitLabel(unit)}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الكمية الأساسية</label>
+                    <Input type="number" min={0.001} step="0.001" value={li.main_quantity} onChange={(e) => {
+                      updateLine(idx, 'main_quantity', e.target.value)
+                      updateLine(idx, 'quantity', e.target.value)
+                    }} required />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الوحدة الفرعية</label>
+                    <select value={li.sub_unit_name} onChange={(e) => updateLine(idx, 'sub_unit_name', e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm">
+                      <option value="">بدون وحدة فرعية</option>
+                      {activeUnits.filter((unit) => unit.name !== li.unit_name).map((unit) => <option key={unit.id} value={unit.name}>{unitLabel(unit)}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الكمية الفرعية</label>
+                    <Input type="number" min={0} step="0.001" value={li.sub_quantity_per_main} onChange={(e) => updateLine(idx, 'sub_quantity_per_main', e.target.value)} />
+                  </div>
                 </div>
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الكمية الأساسية</label>
-                  <Input type="number" min={0.001} step="0.001" value={li.main_quantity} onChange={(e) => {
-                    updateLine(idx, 'main_quantity', e.target.value)
-                    updateLine(idx, 'quantity', e.target.value)
-                  }} required />
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تكلفة الوحدة</label>
+                    <Input type="number" min={0} step="0.01" value={li.unit_cost} onChange={(e) => updateLine(idx, 'unit_cost', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تاريخ الصلاحية</label>
+                    <Input type="date" value={li.expiry_date} onChange={(e) => updateLine(idx, 'expiry_date', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">رقم الدفعة</label>
+                    <Input value={li.batch_number} onChange={(e) => updateLine(idx, 'batch_number', e.target.value)} />
+                  </div>
                 </div>
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">الفرعية في كل وحدة</label>
-                  <Input type="number" min={0} step="0.001" value={li.sub_quantity_per_main} onChange={(e) => updateLine(idx, 'sub_quantity_per_main', e.target.value)} />
-                </div>
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">وحدة أساسية</label>
-                  <Input value={li.unit_name} onChange={(e) => updateLine(idx, 'unit_name', e.target.value)} />
-                </div>
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">وحدة فرعية</label>
-                  <Input value={li.sub_unit_name} onChange={(e) => updateLine(idx, 'sub_unit_name', e.target.value)} />
-                </div>
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تكلفة الوحدة</label>
-                  <Input type="number" min={0} step="0.01" value={li.unit_cost} onChange={(e) => updateLine(idx, 'unit_cost', e.target.value)} />
-                </div>
-                <div className="col-span-1">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">تاريخ الصلاحية</label>
-                  <Input type="date" value={li.expiry_date} onChange={(e) => updateLine(idx, 'expiry_date', e.target.value)} />
-                </div>
-                <div className="col-span-1 flex items-end">
-                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">رقم الدفعة</label>
-                  <Input value={li.batch_number} onChange={(e) => updateLine(idx, 'batch_number', e.target.value)} />
-                </div>
-                {lineItems.length > 1 && (
-                  <button type="button" onClick={() => removeLine(idx)} className="p-2 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded">×</button>
-                )}
               </div>
             )
           })}

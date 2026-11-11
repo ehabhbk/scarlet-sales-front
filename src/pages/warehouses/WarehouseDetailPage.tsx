@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api } from '../../services/api'
 import { useAuthStore } from '../../store/authStore'
-import { useSettingsStore, formatMoney } from '../../store/settingsStore'
+import { useSettingsStore, formatMoney, mediaUrl } from '../../store/settingsStore'
 import { ArrowLeft, Search, Edit as PencilIcon, ArrowLeftRight, RefreshCw, Package, AlertTriangle, Clock } from 'lucide-react'
 import Button from '../../components/common/buttons/Button'
 import Input from '../../components/common/inputs/Input'
@@ -48,10 +48,23 @@ interface BatchProduct {
     cost_price: number
     sale_unit?: string | null
     purchase_unit?: string | null
+    main_unit?: string | null
+    sub_unit?: string | null
+    conversion_factor?: number | null
     min_stock?: number
+    expiry_alert_days?: number | null
     image?: string | null
+    category?: { id: number; name: string } | null
+    category_id?: number | null
     expiry_date?: string | null
   }
+}
+
+interface MyWarehouse {
+  id: number
+  can_sell?: boolean
+  can_request_stock?: boolean
+  can_approve_stock?: boolean
 }
 
 interface StockRequest {
@@ -63,6 +76,7 @@ interface StockRequest {
   status: string
   created_at?: string
   requested_by?: number
+  fromWarehouse?: { id: number; name: string }
   toWarehouse?: { id: number; name: string }
   product?: { id: number; name: string }
   requester?: { id: number; name: string }
@@ -108,18 +122,39 @@ export default function WarehouseDetailPage() {
   const [logDateTo, setLogDateTo] = useState('')
   const [logProductId, setLogProductId] = useState('')
 
+  const { data: myWarehouses } = useQuery({
+    queryKey: ['auth-my-warehouses'],
+    queryFn: async () => {
+      const res = await api.get('/auth/my-warehouses')
+      return (res.data.warehouses || []) as MyWarehouse[]
+    },
+    enabled: !!warehouseId,
+  })
+
+  const myLocation = useMemo(
+    () => myWarehouses?.find((item) => item.id === Number(warehouseId)),
+    [myWarehouses, warehouseId]
+  )
+  const canApproveHere = Boolean(myLocation?.can_approve_stock) || canManageStock
+  const canRequestHere = Boolean(myLocation?.can_request_stock) || canRequestStock
+
   const { data: allRequests } = useQuery({
     queryKey: ['stock-requests'],
     queryFn: async () => {
       const res = await api.get('/stock-requests')
       return (res.data.data || []) as StockRequest[]
     },
-    enabled: !!warehouseId && canManageStock,
+    enabled: !!warehouseId && (canApproveHere || canRequestHere),
   })
 
   const warehouseRequests = useMemo(() => {
     if (!allRequests || !warehouseId) return []
     return allRequests.filter((r) => r.from_warehouse_id === Number(warehouseId))
+  }, [allRequests, warehouseId])
+
+  const incomingRequests = useMemo(() => {
+    if (!allRequests || !warehouseId) return []
+    return allRequests.filter((r) => r.to_warehouse_id === Number(warehouseId))
   }, [allRequests, warehouseId])
 
   const filteredLogRequests = useMemo(() => {
@@ -150,13 +185,24 @@ export default function WarehouseDetailPage() {
     onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر رفض الطلب')),
   })
 
+  const receiveWarehouseRequest = useMutation({
+    mutationFn: async (id: number) => api.post(`/stock-requests/${id}/receive`),
+    onSuccess: () => {
+      toast.success('تم استلام الطلب ونقل الكمية')
+      queryClient.invalidateQueries({ queryKey: ['stock-requests'] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse-detail-batches', warehouseId] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse-detail', warehouseId] })
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر استلام الطلب')),
+  })
+
   const { data: warehousesForRequest } = useQuery({
     queryKey: ['warehouses-for-request'],
     queryFn: async () => {
       const res = await api.get('/warehouses?type=warehouse')
       return (res.data.warehouses || []) as WarehouseDetail[]
     },
-    enabled: canRequestStock && !!warehouseId,
+    enabled: canRequestHere && !!warehouseId,
   })
 
   const { data: productsForRequest } = useQuery({
@@ -165,7 +211,7 @@ export default function WarehouseDetailPage() {
       const res = await api.get('/products?per_page=1000')
       return (res.data.data || []) as StoreProduct[]
     },
-    enabled: canRequestStock && !!warehouseId,
+    enabled: canRequestHere && !!warehouseId,
   })
 
   const { data: productsForLog } = useQuery({
@@ -207,6 +253,13 @@ export default function WarehouseDetailPage() {
   const [batchQuantity, setBatchQuantity] = useState('')
   const [batchBatchNumber, setBatchBatchNumber] = useState('')
   const [batchExpiryDate, setBatchExpiryDate] = useState('')
+  const [batchSalePrice, setBatchSalePrice] = useState('')
+  const [batchCostPrice, setBatchCostPrice] = useState('')
+  const [batchSubQuantity, setBatchSubQuantity] = useState('')
+  const [batchMainUnit, setBatchMainUnit] = useState('')
+  const [batchSubUnit, setBatchSubUnit] = useState('')
+  const [batchMinStock, setBatchMinStock] = useState('')
+  const [batchExpiryAlertMonths, setBatchExpiryAlertMonths] = useState('')
   const queryClient = useQueryClient()
 
   const { data: warehouse, isLoading: warehouseLoading } = useQuery({
@@ -227,8 +280,29 @@ export default function WarehouseDetailPage() {
     enabled: !!warehouseId,
   })
 
+  const { data: unitsData } = useQuery({
+    queryKey: ['inventory-units'],
+    queryFn: async () => {
+      const res = await api.get('/inventory-units')
+      return (res.data.units || []) as { id: number; name: string; abbreviation?: string }[]
+    },
+  })
+  const units = unitsData || []
+
   const updateBatchMutation = useMutation({
-    mutationFn: async (data: { id: number; quantity: number; batch_number?: string; expiry_date?: string }) => {
+    mutationFn: async (data: {
+      id: number
+      quantity: number
+      cost_price?: number
+      batch_number?: string
+      expiry_date?: string
+      sale_price?: number
+      conversion_factor?: number
+      main_unit?: string
+      sub_unit?: string
+      min_stock?: number
+      expiry_alert_days?: number
+    }) => {
       await api.put(`/warehouses/${warehouseId}/batches/${data.id}`, data)
     },
     onSuccess: () => {
@@ -236,7 +310,10 @@ export default function WarehouseDetailPage() {
       setShowBatchModal(false)
       setEditingBatch(null)
       queryClient.invalidateQueries({ queryKey: ['warehouse-detail-batches', warehouseId] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse-detail', warehouseId] })
       queryClient.invalidateQueries({ queryKey: ['warehouses'] })
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      queryClient.invalidateQueries({ queryKey: ['inventory-products'] })
     },
     onError: (error) => toast.error(getApiErrorMessage(error, 'تعذر تعديل المنتج')),
   })
@@ -275,6 +352,8 @@ export default function WarehouseDetailPage() {
     }).length
   }, [detailData])
 
+  const requestsForModal = warehouse?.type === 'store' ? incomingRequests : warehouseRequests
+
   if (warehouseLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -301,7 +380,7 @@ export default function WarehouseDetailPage() {
             onClick={() => navigate('/warehouses')}
           >
             <ArrowLeft className="w-4 h-4" />
-            返回
+            رجوع
           </Button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{warehouse.name}</h1>
@@ -312,14 +391,21 @@ export default function WarehouseDetailPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* في صفحة المتجر: إظهار زر "طلب من المخزن" فقط */}
-          {warehouse?.type === 'store' && canRequestStock && (
+          {warehouse?.type === 'store' && canRequestHere && (
             <Button onClick={() => setShowRequestModal(true)}>
               <ArrowLeftRight className="w-4 h-4" />
               طلب من المخزن
             </Button>
           )}
+          {/* في صفحة المتجر: طلبات واردة تحتاج استلام */}
+          {warehouse?.type === 'store' && (
+            <Button variant="secondary" onClick={() => setShowRequestsModal(true)}>
+              <Package className="w-4 h-4" />
+              طلبات المتجر
+            </Button>
+          )}
           {/* في صفحة المخزن: إظهار زر "سجل الطلبات" فقط */}
-          {warehouse?.type !== 'store' && canManageStock && (
+          {warehouse?.type !== 'store' && canApproveHere && (
             <Button onClick={() => {
               setLogDateFrom('')
               setLogDateTo('')
@@ -371,10 +457,12 @@ export default function WarehouseDetailPage() {
             <thead className="bg-gray-50 dark:bg-gray-800">
               <tr>
                 <th className="px-3 py-2 text-start">المنتج</th>
+                <th className="px-3 py-2 text-start">التصنيف</th>
                 <th className="px-3 py-2 text-start">الباركود / SKU</th>
                 <th className="px-3 py-2 text-start">رقم الدفعة</th>
-                <th className="px-3 py-2 text-start">الكمية</th>
+                <th className="px-3 py-2 text-start">الوحدة / الكمية</th>
                 <th className="px-3 py-2 text-start">تكلفة الوحدة</th>
+                <th className="px-3 py-2 text-start">سعر البيع</th>
                 <th className="px-3 py-2 text-start">تاريخ الصلاحية</th>
                 <th className="px-3 py-2 text-start">الحالة</th>
                 <th className="px-3 py-2 text-start">الإجراءات</th>
@@ -382,64 +470,102 @@ export default function WarehouseDetailPage() {
             </thead>
             <tbody>
               {filteredProducts.length === 0 ? (
-                <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-500">لا توجد منتجات في هذا المخزن</td></tr>
+                <tr><td colSpan={10} className="px-3 py-8 text-center text-gray-500">لا توجد منتجات في هذا المخزن</td></tr>
               ) : (
-                filteredProducts.map((batch) => (
-                  <tr key={batch.id} className="border-b border-gray-100 dark:border-gray-800">
-                    <td className="px-3 py-2 font-medium">{batch.product?.name || 'منتج'}</td>
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-300">
-                      {batch.product?.barcode || batch.product?.sku || '-'}
-                    </td>
-                    <td className="px-3 py-2 text-gray-600 dark:text-gray-300">{batch.batch_number || '-'}</td>
-                    <td className="px-3 py-2">
-                      <span className={`px-2 py-0.5 rounded text-xs ${Number(batch.quantity) <= 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                        {formatNumber(Number(batch.quantity))}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">{formatMoney(Number(batch.cost_price), symbol)}</td>
-                    <td className="px-3 py-2">
-                      {batch.product?.expiry_date ? (
-                        <span className={`text-xs ${new Date(batch.product.expiry_date) < new Date() ? 'text-red-600 font-bold' : 'text-amber-600'}`}>
-                          {formatDate(batch.product.expiry_date)}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-500">-</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      <Badge
-                        variant={
-                          batch.product?.expiry_date && new Date(batch.product.expiry_date) < new Date()
-                            ? 'danger'
-                            : batch.product?.expiry_date && Number(batch.quantity) <= Number(batch.product?.min_stock ?? 0)
-                            ? 'warning'
-                            : 'success'
-                        }
-                      >
-                        {batch.product?.expiry_date && new Date(batch.product.expiry_date) < new Date()
-                          ? 'منتهية'
-                          : batch.product?.expiry_date && Number(batch.quantity) <= Number(batch.product?.min_stock ?? 0)
-                          ? 'قريب النفاذ'
-                          : 'متوفر'}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setEditingBatch(batch)
-                          setBatchQuantity(String(batch.quantity))
-                          setBatchBatchNumber(batch.batch_number || '')
-                          setBatchExpiryDate(batch.product?.expiry_date || '')
-                          setShowBatchModal(true)
-                        }}
-                        className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded" title="تعديل المنتج"
-                      >
-                        <PencilIcon className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                filteredProducts.map((batch) => {
+                  const quantity = Number(batch.quantity)
+                  const conversion = Number(batch.product?.conversion_factor ?? 0)
+                  const subQuantity = conversion > 0 ? quantity * conversion : 0
+                  const expired = Boolean(batch.expiry_date && new Date(batch.expiry_date) < new Date())
+                  const low = Number(batch.product?.min_stock ?? 0) > 0 && quantity <= Number(batch.product?.min_stock ?? 0)
+                  return (
+                    <tr key={batch.id} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          {batch.product?.image ? (
+                            <img
+                              src={mediaUrl(batch.product.image)}
+                              alt={batch.product?.name || ''}
+                              className="h-10 w-10 rounded-lg object-cover"
+                            />
+                          ) : (
+                            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-400 dark:bg-gray-800">
+                              <Package className="h-5 w-5" />
+                            </span>
+                          )}
+                          <span className="font-medium">{batch.product?.name || 'منتج'}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-gray-600 dark:text-gray-300">
+                        {batch.product?.category?.name || '-'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-600 dark:text-gray-300">
+                        {batch.product?.barcode || batch.product?.sku || '-'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-600 dark:text-gray-300">{batch.batch_number || '-'}</td>
+                      <td className="px-3 py-2">
+                        <div className="space-y-0.5">
+                          <span className={`px-2 py-0.5 rounded text-xs ${quantity <= 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {formatNumber(quantity)} {batch.product?.main_unit || batch.product?.sale_unit || ''}
+                          </span>
+                          {batch.product?.sub_unit && conversion > 0 && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                              {formatNumber(subQuantity)} {batch.product.sub_unit}
+                            </p>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">{formatMoney(Number(batch.cost_price), symbol)}</td>
+                      <td className="px-3 py-2 font-medium">{formatMoney(Number(batch.product?.sale_price ?? 0), symbol)}</td>
+                      <td className="px-3 py-2">
+                        {batch.expiry_date ? (
+                          <span className={`text-xs ${expired ? 'text-red-600 font-bold' : 'text-amber-600'}`}>
+                            {formatDate(batch.expiry_date)}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-500">-</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <Badge variant={expired ? 'danger' : low ? 'warning' : 'success'}>
+                          {expired ? 'منتهية' : low ? 'قريب النفاذ' : 'متوفر'}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2">
+                        {canManageStock && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditingBatch(batch)
+                              setBatchQuantity(String(batch.quantity))
+                              setBatchBatchNumber(batch.batch_number || '')
+                              setBatchExpiryDate(batch.expiry_date || '')
+                              setBatchSalePrice(String(batch.product?.sale_price ?? ''))
+                              setBatchCostPrice(String(batch.cost_price ?? ''))
+                              setBatchMainUnit(batch.product?.main_unit || batch.product?.sale_unit || '')
+                              setBatchSubUnit(batch.product?.sub_unit || '')
+                              setBatchMinStock(String(batch.product?.min_stock ?? ''))
+                              setBatchExpiryAlertMonths(
+                                batch.product?.expiry_alert_days
+                                  ? String(Math.round(Number(batch.product.expiry_alert_days) / 30))
+                                  : ''
+                              )
+                              setBatchSubQuantity(
+                                batch.product?.sub_unit && Number(batch.product?.conversion_factor ?? 0) > 0
+                                  ? String(Number(batch.quantity) * Number(batch.product?.conversion_factor ?? 0))
+                                  : ''
+                              )
+                              setShowBatchModal(true)
+                            }}
+                            className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded" title="تعديل المنتج"
+                          >
+                            <PencilIcon className="w-4 h-4" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
@@ -483,9 +609,21 @@ export default function WarehouseDetailPage() {
           onSubmit={(event) => {
             event.preventDefault()
             if (!editingBatch) return
+            const mainQty = Number(batchQuantity)
+            const subQty = Number(batchSubQuantity)
+            const conversionFactor =
+              mainQty > 0 && batchSubQuantity !== '' && subQty > 0 ? subQty / mainQty : undefined
             updateBatchMutation.mutate({
               id: editingBatch.id,
-              quantity: Number(batchQuantity),
+              quantity: mainQty,
+              cost_price: batchCostPrice === '' ? undefined : Number(batchCostPrice),
+              sale_price: batchSalePrice === '' ? undefined : Number(batchSalePrice),
+              conversion_factor: conversionFactor,
+              main_unit: batchMainUnit,
+              sub_unit: batchSubUnit,
+              min_stock: batchMinStock === '' ? undefined : Number(batchMinStock),
+              expiry_alert_days:
+                batchExpiryAlertMonths === '' ? undefined : Number(batchExpiryAlertMonths) * 30,
               batch_number: batchBatchNumber || undefined,
               expiry_date: batchExpiryDate || undefined,
             })
@@ -497,19 +635,105 @@ export default function WarehouseDetailPage() {
             readOnly
           />
           <Input
-            label="الكمية"
+            label="سعر البيع"
             type="number"
             min={0}
-            step="0.001"
-            value={batchQuantity}
-            onChange={(e) => setBatchQuantity(e.target.value)}
+            step="0.01"
+            value={batchSalePrice}
+            onChange={(e) => setBatchSalePrice(e.target.value)}
             required
           />
-          <Input
-            label="رقم الدفعة"
-            value={batchBatchNumber}
-            onChange={(e) => setBatchBatchNumber(e.target.value)}
-          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-200">نوع الوحدة الأساسية</label>
+              <select
+                value={batchMainUnit}
+                onChange={(e) => setBatchMainUnit(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 dark:border-gray-700 dark:bg-gray-900"
+              >
+                <option value="">بدون وحدة</option>
+                {units.map((unit) => (
+                  <option key={unit.id} value={unit.name}>{unit.name}</option>
+                ))}
+              </select>
+            </div>
+            <Input
+              label="كمية الوحدة الأساسية"
+              type="number"
+              min={0}
+              step="0.001"
+              value={batchQuantity}
+              onChange={(e) => {
+                const value = e.target.value
+                const previousMain = Number(batchQuantity)
+                const previousSub = Number(batchSubQuantity)
+                const conversion =
+                  Number(editingBatch?.product?.conversion_factor ?? 0) ||
+                  (previousMain > 0 && previousSub > 0 ? previousSub / previousMain : 0)
+                setBatchQuantity(value)
+                if (conversion > 0) {
+                  setBatchSubQuantity(String(Number(value) * conversion))
+                }
+              }}
+              required
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-200">نوع الوحدة الفرعية</label>
+              <select
+                value={batchSubUnit}
+                onChange={(e) => setBatchSubUnit(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 dark:border-gray-700 dark:bg-gray-900"
+              >
+                <option value="">بدون وحدة فرعية</option>
+                {units
+                  .filter((unit) => unit.name !== batchMainUnit)
+                  .map((unit) => (
+                    <option key={unit.id} value={unit.name}>{unit.name}</option>
+                  ))}
+              </select>
+            </div>
+            <Input
+              label="كمية الوحدة الفرعية"
+              type="number"
+              min={0}
+              step="0.001"
+              value={batchSubQuantity}
+              onChange={(e) => setBatchSubQuantity(e.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input
+              label="الحد الأدنى للمخزون (لهذا الموقع)"
+              type="number"
+              min={0}
+              value={batchMinStock}
+              onChange={(e) => setBatchMinStock(e.target.value)}
+            />
+            <Input
+              label="أشهر قبل انتهاء الصلاحية (لهذا الموقع)"
+              type="number"
+              min={0}
+              value={batchExpiryAlertMonths}
+              onChange={(e) => setBatchExpiryAlertMonths(e.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input
+              label="تكلفة الوحدة"
+              type="number"
+              min={0}
+              step="0.01"
+              value={batchCostPrice}
+              onChange={(e) => setBatchCostPrice(e.target.value)}
+            />
+            <Input
+              label="رقم الدفعة"
+              value={batchBatchNumber}
+              onChange={(e) => setBatchBatchNumber(e.target.value)}
+            />
+          </div>
           <Input
             label="تاريخ الصلاحية"
             type="date"
@@ -523,23 +747,25 @@ export default function WarehouseDetailPage() {
         </form>
       </Modal>
 
-      {/* Warehouse Requests Modal */}
+      {/* Warehouse / Store Requests Modal */}
       <Modal
         isOpen={showRequestsModal}
         onClose={() => setShowRequestsModal(false)}
-        title={`طلبات مخزن ${warehouse?.name || ''}`}
+        title={`طلبات ${warehouse?.type === 'store' ? 'متجر' : 'مخزن'} ${warehouse?.name || ''}`}
         size="lg"
       >
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">طلبات صادرة من هذا المخزن</h3>
-            <Badge variant="info">{warehouseRequests.length} طلب</Badge>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {warehouse?.type === 'store' ? 'طلبات واردة إلى هذا المتجر' : 'طلبات صادرة من هذا المخزن'}
+            </h3>
+            <Badge variant="info">{requestsForModal.length} طلب</Badge>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-800">
                 <tr>
-                  <th className="px-3 py-2 text-start">المتجر المطلوب له</th>
+                  <th className="px-3 py-2 text-start">{warehouse?.type === 'store' ? 'المخزن المصدر' : 'المتجر المطلوب له'}</th>
                   <th className="px-3 py-2 text-start">المنتج</th>
                   <th className="px-3 py-2 text-start">الكمية</th>
                   <th className="px-3 py-2 text-start">مقدم الطلب</th>
@@ -548,12 +774,16 @@ export default function WarehouseDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {warehouseRequests.length === 0 ? (
-                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-500">لا توجد طلبات صادرة من هذا المخزن</td></tr>
+                {requestsForModal.length === 0 ? (
+                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-500">لا توجد طلبات</td></tr>
                 ) : (
-                  warehouseRequests.map((req) => (
+                  requestsForModal.map((req) => (
                     <tr key={req.id} className="border-b border-gray-100 dark:border-gray-800">
-                      <td className="px-3 py-2">{req.toWarehouse?.name || req.to_warehouse_id}</td>
+                      <td className="px-3 py-2">
+                        {warehouse?.type === 'store'
+                          ? req.fromWarehouse?.name || req.from_warehouse_id
+                          : req.toWarehouse?.name || req.to_warehouse_id}
+                      </td>
                       <td className="px-3 py-2">{req.product?.name || req.product_id}</td>
                       <td className="px-3 py-2">{formatNumber(req.requested_quantity)}</td>
                       <td className="px-3 py-2">{req.requester?.name || '-'}</td>
@@ -561,27 +791,37 @@ export default function WarehouseDetailPage() {
                         <Badge
                           variant={req.status === 'pending' ? 'warning' : req.status === 'approved' ? 'success' : req.status === 'rejected' ? 'danger' : 'default'}
                         >
-                          {req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'معتمد' : req.status === 'rejected' ? 'مرفوض' : req.status}
+                          {req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'معتمد' : req.status === 'rejected' ? 'مرفوض' : req.status === 'completed' ? 'مستلم' : req.status}
                         </Badge>
                       </td>
                       <td className="px-3 py-2">
-                        {req.status === 'pending' && (
+                        {req.status === 'pending' && canApproveHere && (
                           <div className="flex flex-wrap gap-1">
                             <Button
                               size="sm"
                               variant="success"
-                              onClick={() => { setShowRequestsModal(false); approveWarehouseRequest.mutate(req.id) }}
+                              onClick={() => approveWarehouseRequest.mutate(req.id)}
                             >
                               قبول
                             </Button>
                             <Button
                               size="sm"
                               variant="danger"
-                              onClick={() => { setShowRequestsModal(false); rejectWarehouseRequest.mutate(req.id) }}
+                              onClick={() => rejectWarehouseRequest.mutate(req.id)}
                             >
                               رفض
                             </Button>
                           </div>
+                        )}
+                        {req.status === 'approved' && (
+                          <Button
+                            size="sm"
+                            variant="success"
+                            loading={receiveWarehouseRequest.isPending}
+                            onClick={() => receiveWarehouseRequest.mutate(req.id)}
+                          >
+                            استلام
+                          </Button>
                         )}
                       </td>
                     </tr>

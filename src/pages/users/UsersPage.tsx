@@ -44,10 +44,25 @@ interface KitchenStationOption {
   display_name?: string
 }
 
+interface WarehouseOption {
+  id: number
+  name: string
+  type?: string | null
+  allow_sales?: boolean
+}
+
+interface WarehouseAssignment {
+  id: number
+  can_sell: boolean
+  can_request_stock: boolean
+  can_approve_stock: boolean
+}
+
 interface UserFormProps {
   roles: UserRoleOption[]
   accounts: Account[]
   kitchenStations: KitchenStationOption[]
+  warehouses: WarehouseOption[]
   onClose: () => void
   onSuccess: () => void
 }
@@ -96,6 +111,14 @@ export default function UsersPage() {
     queryFn: async () => {
       const res = await api.get('/admin/kitchen-stations')
       return (res.data.stations || []) as KitchenStationOption[]
+    },
+  })
+
+  const { data: allWarehouses } = useQuery({
+    queryKey: ['warehouses-all-for-users'],
+    queryFn: async () => {
+      const res = await api.get('/warehouses')
+      return (res.data.warehouses || []) as WarehouseOption[]
     },
   })
 
@@ -157,12 +180,13 @@ export default function UsersPage() {
   }, [warehouseUser?.id, userWarehouses])
 
   const updateUserWarehousesMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (warehouses: typeof warehousePermsDraft) => {
       if (!warehouseUser?.id) return
-      const payload = {
-        warehouses: warehousePermsDraft,
-      }
-      await api.post(`/admin/users/${warehouseUser.id}/warehouses`, payload)
+      await api.post(`/admin/users/${warehouseUser.id}/warehouses`, {
+        warehouses: warehouses.filter(
+          (w) => w.can_sell || w.can_request_stock || w.can_approve_stock
+        ),
+      })
     },
     onSuccess: () => {
       toast.success('تم تحديث مخازن المستخدم')
@@ -313,6 +337,7 @@ export default function UsersPage() {
           roles={roles || []}
           accounts={accounts || []}
           kitchenStations={kitchenStations || []}
+          warehouses={allWarehouses || []}
           onClose={() => setShowModal(false)}
           onSuccess={() => {
             setShowModal(false)
@@ -331,6 +356,7 @@ export default function UsersPage() {
             roles={roles || []}
             accounts={accounts || []}
             kitchenStations={kitchenStations || []}
+            warehouses={allWarehouses || []}
             onClose={() => setEditingUser(null)}
             onSuccess={() => {
               setEditingUser(null)
@@ -353,7 +379,7 @@ export default function UsersPage() {
           }}
           onSave={(warehouses) => {
             setWarehousePermsDraft(warehouses)
-            updateUserWarehousesMutation.mutate()
+            updateUserWarehousesMutation.mutate(warehouses)
           }}
         />
       </Modal>
@@ -369,6 +395,127 @@ function isCashierRole(role: string) {
 function isChefRole(role: string) {
   const normalized = role.trim().toLowerCase()
   return normalized === 'chef' || normalized === 'شيف' || normalized === 'طباخ'
+}
+
+function appendWarehouseAssignments(formData: FormData, warehouses: WarehouseAssignment[]) {
+  warehouses.forEach((warehouse, index) => {
+    formData.append(`warehouses[${index}][id]`, String(warehouse.id))
+    formData.append(`warehouses[${index}][can_sell]`, warehouse.can_sell ? '1' : '0')
+    formData.append(`warehouses[${index}][can_request_stock]`, warehouse.can_request_stock ? '1' : '0')
+    formData.append(`warehouses[${index}][can_approve_stock]`, warehouse.can_approve_stock ? '1' : '0')
+  })
+}
+
+function warehouseTypeLabel(type?: string | null) {
+  if (type === 'store') return 'متجر'
+  if (type === 'warehouse') return 'مخزن'
+  return 'مخزن ومتجر'
+}
+
+function WarehousePermissionsField({ warehouses, value, onChange }: {
+  warehouses: WarehouseOption[]
+  value: WarehouseAssignment[]
+  onChange: (value: WarehouseAssignment[]) => void
+}) {
+  const selected = new Map(value.map((item) => [item.id, item]))
+
+  const toggleWarehouse = (warehouse: WarehouseOption, checked: boolean) => {
+    if (checked) {
+      onChange([
+        ...value,
+        {
+          id: warehouse.id,
+          can_sell: warehouse.allow_sales !== false,
+          can_request_stock: warehouse.type !== 'warehouse',
+          can_approve_stock: warehouse.type !== 'store',
+        },
+      ])
+    } else {
+      onChange(value.filter((item) => item.id !== warehouse.id))
+    }
+  }
+
+  const setPermission = (id: number, key: keyof Omit<WarehouseAssignment, 'id'>, checked: boolean) => {
+    onChange(value.map((item) => (item.id === id ? { ...item, [key]: checked } : item)))
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">المخازن والمتاجر والصلاحيات</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            حدد المواقع المسموح للمستخدم بالعمل عليها، ثم فعّل الصلاحيات المطلوبة في كل موقع.
+          </p>
+        </div>
+        <Badge variant="info">{value.length} موقع محدد</Badge>
+      </div>
+      <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+        إذا لم تحدد أي موقع فسيتمتع المستخدم بوصول كامل إلى جميع المخازن والمتاجر. المدير يملك كل الصلاحيات دائمًا.
+      </p>
+      <div className="max-h-80 space-y-2 overflow-y-auto pe-1">
+        {warehouses.length === 0 ? (
+          <p className="py-4 text-center text-sm text-gray-500">لا توجد مخازن أو متاجر مسجلة.</p>
+        ) : (
+          warehouses.map((warehouse) => {
+            const assignment = selected.get(warehouse.id)
+            return (
+              <div
+                key={warehouse.id}
+                className={`rounded-lg border p-3 transition ${
+                  assignment
+                    ? 'border-primary/40 bg-primary/5 dark:border-primary/40 dark:bg-primary/10'
+                    : 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40'
+                }`}
+              >
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={!!assignment}
+                    onChange={(event) => toggleWarehouse(warehouse, event.target.checked)}
+                    className="rounded border-gray-300 dark:border-gray-700"
+                  />
+                  <span className="font-medium text-gray-900 dark:text-gray-100">{warehouse.name}</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">({warehouseTypeLabel(warehouse.type)})</span>
+                </label>
+                {assignment && (
+                  <div className="mt-2 flex flex-wrap items-center gap-4 ps-6">
+                    <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={assignment.can_sell}
+                        onChange={(event) => setPermission(warehouse.id, 'can_sell', event.target.checked)}
+                        className="rounded border-gray-300 dark:border-gray-700"
+                      />
+                      بيع (POS)
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={assignment.can_request_stock}
+                        onChange={(event) => setPermission(warehouse.id, 'can_request_stock', event.target.checked)}
+                        className="rounded border-gray-300 dark:border-gray-700"
+                      />
+                      طلب مخزون
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={assignment.can_approve_stock}
+                        onChange={(event) => setPermission(warehouse.id, 'can_approve_stock', event.target.checked)}
+                        className="rounded border-gray-300 dark:border-gray-700"
+                      />
+                      اعتماد طلبات المخزون
+                    </label>
+                  </div>
+                )}
+              </div>
+            )
+          })
+        )}
+      </div>
+    </div>
+  )
 }
 
 function CashierAccountsNotice() {
@@ -435,7 +582,7 @@ function CashierAccountSummary({ user }: { user: User }) {
   )
 }
 
-function UserForm({ roles, accounts, kitchenStations, onClose, onSuccess }: UserFormProps) {
+function UserForm({ roles, accounts, kitchenStations, warehouses, onClose, onSuccess }: UserFormProps) {
   const [formData, setFormData] = useState<UserFormValues>({
     name: '',
     username: '',
@@ -446,6 +593,7 @@ function UserForm({ roles, accounts, kitchenStations, onClose, onSuccess }: User
     revenue_account_id: '',
     kitchen_station_id: '',
   })
+  const [warehouseAssignments, setWarehouseAssignments] = useState<WarehouseAssignment[]>([])
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState('')
 
@@ -459,9 +607,11 @@ function UserForm({ roles, accounts, kitchenStations, onClose, onSuccess }: User
     mutationFn: async (data: Record<string, unknown>) => {
       if (imageFile) {
         const requestData = new FormData()
-        Object.entries(data).forEach(([key, value]) =>
+        Object.entries(data).forEach(([key, value]) => {
+          if (key === 'warehouses') return
           requestData.append(key, value === null || value === undefined ? '' : key === 'is_active' ? (value ? '1' : '0') : String(value))
-        )
+        })
+        appendWarehouseAssignments(requestData, (data.warehouses || []) as WarehouseAssignment[])
         requestData.append('image_file', imageFile)
         await api.post('/admin/users', requestData, {
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -487,6 +637,7 @@ function UserForm({ roles, accounts, kitchenStations, onClose, onSuccess }: User
       kitchen_station_id: isChefRole(formData.role) && formData.kitchen_station_id
         ? Number(formData.kitchen_station_id)
         : null,
+      warehouses: warehouseAssignments,
     })
   }
 
@@ -562,6 +713,11 @@ function UserForm({ roles, accounts, kitchenStations, onClose, onSuccess }: User
         formData={formData}
         setFormData={setFormData}
       />
+      <WarehousePermissionsField
+        warehouses={warehouses}
+        value={warehouseAssignments}
+        onChange={setWarehouseAssignments}
+      />
       <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
         <input
           type="checkbox"
@@ -583,7 +739,7 @@ function UserForm({ roles, accounts, kitchenStations, onClose, onSuccess }: User
   )
 }
 
-function EditUserForm({ user, roles, accounts, kitchenStations, onClose, onSuccess }: UserFormProps & { user: User }) {
+function EditUserForm({ user, roles, accounts, kitchenStations, warehouses, onClose, onSuccess }: UserFormProps & { user: User }) {
   const [formData, setFormData] = useState<UserFormValues>({
     name: user.name || '',
     username: user.username || '',
@@ -594,10 +750,34 @@ function EditUserForm({ user, roles, accounts, kitchenStations, onClose, onSucce
     revenue_account_id: user.revenue_account_id ? String(user.revenue_account_id) : '',
     kitchen_station_id: user.kitchen_station_id ? String(user.kitchen_station_id) : '',
   })
+  const [warehouseAssignments, setWarehouseAssignments] = useState<WarehouseAssignment[]>([])
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState(
     user.image || user.avatar ? mediaUrl(user.image || user.avatar) : ''
   )
+
+  const { data: userWarehouseAssignments } = useQuery({
+    queryKey: ['user-warehouse-assignments', user.id],
+    queryFn: async () => {
+      const res = await api.get(`/admin/users/${user.id}/warehouses`)
+      return (res.data.warehouses || []) as Array<WarehouseAssignment & WarehouseOption>
+    },
+  })
+
+  useEffect(() => {
+    if (!userWarehouseAssignments) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setWarehouseAssignments(
+      userWarehouseAssignments
+        .filter((w) => w.can_sell || w.can_request_stock || w.can_approve_stock)
+        .map((w) => ({
+          id: w.id,
+          can_sell: w.can_sell,
+          can_request_stock: w.can_request_stock,
+          can_approve_stock: w.can_approve_stock,
+        }))
+    )
+  }, [userWarehouseAssignments])
 
   useEffect(() => {
     return () => {
@@ -609,9 +789,11 @@ function EditUserForm({ user, roles, accounts, kitchenStations, onClose, onSucce
     mutationFn: async (data: Record<string, unknown>) => {
       if (imageFile) {
         const requestData = new FormData()
-        Object.entries(data).forEach(([key, value]) =>
+        Object.entries(data).forEach(([key, value]) => {
+          if (key === 'warehouses') return
           requestData.append(key, value === null || value === undefined ? '' : key === 'is_active' ? (value ? '1' : '0') : String(value))
-        )
+        })
+        appendWarehouseAssignments(requestData, (data.warehouses || []) as WarehouseAssignment[])
         requestData.append('_method', 'PUT')
         requestData.append('image_file', imageFile)
         await api.post(`/admin/users/${user.id}`, requestData, {
@@ -638,6 +820,7 @@ function EditUserForm({ user, roles, accounts, kitchenStations, onClose, onSucce
       pay_account_id: number | null
       revenue_account_id: number | null
       kitchen_station_id: number | null
+      warehouses: WarehouseAssignment[]
       password?: string
     } = {
       name: formData.name,
@@ -649,6 +832,7 @@ function EditUserForm({ user, roles, accounts, kitchenStations, onClose, onSucce
       kitchen_station_id: isChefRole(formData.role) && formData.kitchen_station_id
         ? Number(formData.kitchen_station_id)
         : null,
+      warehouses: warehouseAssignments,
     }
     if (formData.password) payload.password = formData.password
     mutation.mutate(payload)
@@ -722,6 +906,11 @@ function EditUserForm({ user, roles, accounts, kitchenStations, onClose, onSucce
         cashier={isCashierRole(formData.role)}
         formData={formData}
         setFormData={setFormData}
+      />
+      <WarehousePermissionsField
+        warehouses={warehouses}
+        value={warehouseAssignments}
+        onChange={setWarehouseAssignments}
       />
       <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
         <input
