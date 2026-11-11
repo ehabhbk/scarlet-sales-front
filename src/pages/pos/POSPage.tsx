@@ -56,6 +56,9 @@ interface CartItem {
   unit_label?: string
   conversion_factor?: number
   is_sub_unit?: boolean
+  is_mixed?: boolean
+  main_qty?: number
+  sub_qty?: number
   base_quantity?: number // الكمية بالوحدة الفرعية الأساسية (للتخزين الداخلي)
 }
 
@@ -301,7 +304,7 @@ export default function POSPage() {
   const queryClient = useQueryClient()
 
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null)
-  const [unitSelection, setUnitSelection] = useState<Record<number, 'main' | 'sub'>>({})
+  const [unitSelection, setUnitSelection] = useState<Record<number, 'main' | 'sub' | 'mixed'>>({})
   const [cart, setCart] = useState<CartItem[]>([])
   const [paymentMethod, setPaymentMethod] = useState('')
   const [splitPayment, setSplitPayment] = useState(false)
@@ -905,6 +908,7 @@ export default function POSPage() {
   })
 
   const filteredProducts = products?.filter((product: POSProduct) => {
+    if (product.track_inventory && product.in_stock === false) return false
     if (selectedCategory && Number(product.category_id) !== Number(selectedCategory)) return false
     if (!productSearch.trim()) return true
     const term = productSearch.trim().toLowerCase()
@@ -1076,6 +1080,64 @@ export default function POSPage() {
     }
   }
 
+  const addToCartMixed = (product: POSProduct) => {
+    if (product.is_available === false) {
+      toast.error('هذا المنتج غير متاح للبيع')
+      return
+    }
+    const conversionFactor = Number(product.conversion_factor ?? 1)
+    if (!product.sub_unit || conversionFactor <= 1) {
+      toast.error('لا توجد وحدة فرعية لهذا المنتج')
+      return
+    }
+    const mainInput = window.prompt(
+      `كمية ${product.sale_unit || 'الوحدة الأساسية'} (0 إن لم تُباع):`,
+      '1'
+    )
+    if (mainInput === null) return
+    const subInput = window.prompt(
+      `كمية ${product.sub_unit} (0 إن لم تُباع):`,
+      '0'
+    )
+    if (subInput === null) return
+    const mainQty = Math.max(0, Number(mainInput) || 0)
+    const subQty = Math.max(0, Number(subInput) || 0)
+    if (mainQty === 0 && subQty === 0) {
+      toast.error('أدخل كمية واحدة على الأقل')
+      return
+    }
+    const baseNeeded = mainQty * conversionFactor + subQty
+    const stockBase = Number(product.stock ?? 0) * conversionFactor
+    if (product.track_inventory && baseNeeded > stockBase) {
+      toast.error('الكمية المطلوبة تتجاوز الرصيد المتاح في المخزن')
+      return
+    }
+
+    const mainPrice = mainQty * (Number(product.sale_price) || 0)
+    const subPrice = subQty * ((Number(product.sale_price) || 0) / conversionFactor)
+    const totalPrice = mainPrice + subPrice
+
+    const cartItem: CartItem = {
+      product_id: product.id,
+      name: `${product.name} (مختلط)`,
+      image: product.image,
+      price: totalPrice,
+      quantity: 1,
+      modifiers: [],
+      stock: Number(product.stock ?? 0),
+      track_inventory: product.track_inventory,
+      unit: product.sale_unit ?? undefined,
+      unit_label: product.sale_unit ?? undefined,
+      conversion_factor: conversionFactor,
+      is_mixed: true,
+      main_qty: mainQty,
+      sub_qty: subQty,
+      base_quantity: baseNeeded,
+    }
+    setCart((prev) => [...prev, cartItem])
+    toast.success(`تم اختيار ${product.name}`, { duration: 1500 })
+  }
+
   const reprintOrder = (order: POSOrder) => {
     const receipt: Receipt = {
       cart: (order.items || order.order_items || []).map((it, index) => ({
@@ -1128,6 +1190,10 @@ export default function POSPage() {
       return
     }
     const selectedUnit = unitSelection[product.id] || 'main'
+    if (selectedUnit === 'mixed') {
+      addToCartMixed(product)
+      return
+    }
     const alreadyInCart = cart.some(
       (item) => item.product_id === product.id && item.is_sub_unit === (selectedUnit === 'sub')
     )
@@ -1174,6 +1240,12 @@ export default function POSPage() {
   }
 
   const formatCartQuantity = (item: CartItem) => {
+    if (item.is_mixed) {
+      const parts: string[] = []
+      if (item.main_qty) parts.push(`${item.main_qty} ${item.unit_label ?? ''}`)
+      if (item.sub_qty) parts.push(`${item.sub_qty} ${item.unit ?? ''}`)
+      return parts.join(' + ') || '0'
+    }
     if (item.is_sub_unit && item.conversion_factor && Number(item.conversion_factor) > 1) {
       const base = Number(item.base_quantity ?? 0)
       const conv = Number(item.conversion_factor)
@@ -1332,20 +1404,60 @@ export default function POSPage() {
       notes: customerName
         ? `عميل: ${customerName}${customerPhone ? ` - ${customerPhone}` : ''}`
         : undefined,
-      items: cart.map((item) => ({
-        product_id: item.product_id,
-        quantity: item.quantity,
-        size_id: item.size_id,
-        unit_type: (item.is_sub_unit ? 'sub' : 'main') as 'main' | 'sub',
-        unit_name: item.unit ?? item.unit_label ?? undefined,
-        conversion_factor: item.conversion_factor ?? undefined,
-        base_quantity: item.base_quantity ?? undefined,
-        notes: item.notes,
-        modifier_options: item.modifiers.map((m) => ({
-          modifier_id: m.modifier_id,
-          modifier_option_id: m.modifier_option_id,
-        })),
-      })),
+      items: cart.flatMap((item) => {
+        if (item.is_mixed) {
+          const out: any[] = []
+          if ((item.main_qty ?? 0) > 0) {
+            out.push({
+              product_id: item.product_id,
+              quantity: item.main_qty,
+              size_id: item.size_id,
+              unit_type: 'main' as const,
+              unit_name: item.unit_label ?? item.unit ?? undefined,
+              conversion_factor: item.conversion_factor ?? undefined,
+              base_quantity: (item.main_qty ?? 0) * (item.conversion_factor ?? 1),
+              notes: item.notes,
+              modifier_options: item.modifiers.map((m) => ({
+                modifier_id: m.modifier_id,
+                modifier_option_id: m.modifier_option_id,
+              })),
+            })
+          }
+          if ((item.sub_qty ?? 0) > 0) {
+            out.push({
+              product_id: item.product_id,
+              quantity: item.sub_qty,
+              size_id: item.size_id,
+              unit_type: 'sub' as const,
+              unit_name: item.unit ?? undefined,
+              conversion_factor: item.conversion_factor ?? undefined,
+              base_quantity: item.sub_qty,
+              notes: item.notes,
+              modifier_options: item.modifiers.map((m) => ({
+                modifier_id: m.modifier_id,
+                modifier_option_id: m.modifier_option_id,
+              })),
+            })
+          }
+          return out
+        }
+        return [
+          {
+            product_id: item.product_id,
+            quantity: item.quantity,
+            size_id: item.size_id,
+            unit_type: (item.is_sub_unit ? 'sub' : 'main') as 'main' | 'sub',
+            unit_name: item.unit ?? item.unit_label ?? undefined,
+            conversion_factor: item.conversion_factor ?? undefined,
+            base_quantity: item.base_quantity ?? undefined,
+            notes: item.notes,
+            modifier_options: item.modifiers.map((m) => ({
+              modifier_id: m.modifier_id,
+              modifier_option_id: m.modifier_option_id,
+            })),
+          },
+        ]
+      }),
     }
 
     createOrderMutation.mutate({ orderData, payments: splitPayment ? payments : null })
@@ -1635,12 +1747,13 @@ export default function POSPage() {
                         <select
                           value={selectedUnit}
                           onChange={(e) => {
-                            setUnitSelection({ ...unitSelection, [product.id]: e.target.value as 'main' | 'sub' })
+                            setUnitSelection({ ...unitSelection, [product.id]: e.target.value as 'main' | 'sub' | 'mixed' })
                           }}
                           className="text-xs border border-gray-300 dark:border-gray-700 rounded px-2 py-0.5 bg-white dark:bg-gray-900"
                         >
                           <option value="main">{product.sale_unit || 'الرئيسية'}</option>
                           <option value="sub">{product.sub_unit || 'فرعية'}</option>
+                          <option value="mixed">مختلط (كلاهما)</option>
                         </select>
                       </div>
                     )}
@@ -1688,7 +1801,7 @@ export default function POSPage() {
               <ShoppingCart className="w-5 h-5" />
               سلة المشتريات
               <span className="text-sm font-normal text-gray-500">
-                ({cart.reduce((count, item) => count + item.quantity, 0)})
+                ({cart.reduce((count, item) => count + (item.is_mixed ? (item.main_qty ?? 0) + (item.sub_qty ?? 0) : item.quantity), 0)})
               </span>
             </h2>
           </div>
@@ -1739,19 +1852,29 @@ export default function POSPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => updateQuantity(index, -1)}
-                      className="w-7 h-7 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-300 dark:hover:bg-gray-600"
-                    >
-                      <Minus className="w-3 h-3" />
-                    </button>
-                    <span className="w-6 text-center font-medium text-sm">{formatCartQuantity(item)}</span>
-                    <button
-                      onClick={() => updateQuantity(index, 1)}
-                      className="w-7 h-7 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-300 dark:hover:bg-gray-600"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </button>
+                    {item.is_mixed ? (
+                      <span className="text-xs text-gray-500">
+                        {item.main_qty ? `${item.main_qty} ${item.unit_label ?? ''}` : ''}
+                        {item.main_qty && item.sub_qty ? ' + ' : ''}
+                        {item.sub_qty ? `${item.sub_qty} ${item.unit ?? ''}` : ''}
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => updateQuantity(index, -1)}
+                          className="w-7 h-7 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-300 dark:hover:bg-gray-600"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="w-6 text-center font-medium text-sm">{formatCartQuantity(item)}</span>
+                        <button
+                          onClick={() => updateQuantity(index, 1)}
+                          className="w-7 h-7 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-300 dark:hover:bg-gray-600"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
                   </div>
                   <button
                     onClick={() => removeFromCart(index)}

@@ -30,6 +30,7 @@ import BalanceSheetPage from './pages/finance/BalanceSheetPage'
 import LedgerPage from './pages/finance/LedgerPage'
 import JournalEntriesPage from './pages/finance/JournalEntriesPage'
 import ReportsPage from './pages/reports/ReportsPage'
+import WarehouseReportPage from './pages/reports/WarehouseReportPage'
 import SettingsPage from './pages/settings/SettingsPage'
 import PurchasesPage from './pages/purchases/PurchasesPage'
 import UsersPage from './pages/users/UsersPage'
@@ -263,6 +264,15 @@ function App() {
             isAuthenticated ? (
               <MainLayout>
                 <ReportsPage />
+              </MainLayout>
+            ) : (
+              <Navigate to="/login" />
+            )
+          } />
+          <Route path="/reports/warehouse" element={
+            isAuthenticated ? (
+              <MainLayout>
+                <WarehouseReportPage />
               </MainLayout>
             ) : (
               <Navigate to="/login" />

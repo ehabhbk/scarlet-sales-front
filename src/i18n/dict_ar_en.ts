@@ -248,4 +248,13 @@ export const ar: Record<string, string> = {
   completed_today: 'مكتملة اليوم',
   cancelled_today: 'ملغاة اليوم',
   pending_orders: 'طلبات pending',
+  stores: 'المتاجر',
+  warehouses: 'المخازن',
+  notifications: 'الإشعارات',
+  suppliers: 'الموردون',
+  roles: 'الأدوار والصلاحيات',
+  stockRequests: 'إدارة الطلبات',
+  stockMovements: 'حركات المخزون',
+  inventoryUnits: 'وحدات القياس',
+  stocktaking: 'جرد المخزون',
 }

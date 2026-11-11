@@ -17,6 +17,7 @@ import {
   Trophy,
   Users,
   Wallet,
+  Warehouse,
 } from 'lucide-react'
 import {
   BarChart,
@@ -258,6 +259,21 @@ export default function DashboardPage() {
     queryFn: async () => {
       const res = await api.get('/product-alerts')
       return res.data as ProductAlerts
+    },
+    refetchInterval: 60000,
+  })
+
+  const { data: warehouseStats } = useQuery({
+    queryKey: ['dashboard', 'warehouse-stats'],
+    queryFn: async () => {
+      const res = await api.get('/dashboard/warehouse-stats')
+      return res.data as {
+        warehouses_count: number
+        stores_count: number
+        expired_products: number
+        near_expiry_products: number
+        low_stock_products: number
+      }
     },
     refetchInterval: 60000,
   })
@@ -727,6 +743,35 @@ export default function DashboardPage() {
             </div>
           )}
         </Card>
+      )}
+
+      {warehouseStats && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">المخازن والمتاجر وتنبيهات المخزون</h2>
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <PieCard
+              title="المخازن والمتاجر"
+              icon={<Warehouse className="h-5 w-5" />}
+              data={[
+                { name: 'المخازن', value: warehouseStats.warehouses_count, count: warehouseStats.warehouses_count },
+                { name: 'المتاجر', value: warehouseStats.stores_count, count: warehouseStats.stores_count },
+              ]}
+              symbol={symbol}
+              countLabel="موقع"
+            />
+            <PieCard
+              title="تنبيهات المنتجات"
+              icon={<AlertTriangle className="h-5 w-5" />}
+              data={[
+                { name: 'منتهية الصلاحية', value: warehouseStats.expired_products, count: warehouseStats.expired_products },
+                { name: 'قاربت على الانتهاء', value: warehouseStats.near_expiry_products, count: warehouseStats.near_expiry_products },
+                { name: 'قاربت على النفاد', value: warehouseStats.low_stock_products, count: warehouseStats.low_stock_products },
+              ]}
+              symbol={symbol}
+              countLabel="منتج"
+            />
+          </div>
+        </section>
       )}
 
       {lowStockAlerts.length > 0 && (
